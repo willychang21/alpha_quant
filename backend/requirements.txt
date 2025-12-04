@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+yfinance
+pydantic
+sqlalchemy
+pandas
+numpy
+httpx
+scipy
+redis
+cvxpy
+scikit-learn
+pytest

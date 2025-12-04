@@ -1,0 +1,31 @@
+{
+  "test_market_data": [
+    {
+      "name": "test_market_data",
+      "version": "v1.0",
+      "path": "/Users/zhangjunjie/Documents/DCA/backend/data_lake/versioned/test_market_data/market_data_latest_v1.0.csv",
+      "created_at": "2025-12-03T23:59:46.113756",
+      "metadata": {
+        "source": "dummy"
+      }
+    },
+    {
+      "name": "test_market_data",
+      "version": "v1.0_1764835413",
+      "path": "/Users/zhangjunjie/Documents/DCA/backend/data_lake/versioned/test_market_data/market_data_latest_v1.0_1764835413.csv",
+      "created_at": "2025-12-04T00:03:33.246117",
+      "metadata": {
+        "source": "dummy"
+      }
+    },
+    {
+      "name": "test_market_data",
+      "version": "v1.0_1764835728",
+      "path": "/Users/zhangjunjie/Documents/DCA/backend/data_lake/versioned/test_market_data/market_data_latest_v1.0_1764835728.csv",
+      "created_at": "2025-12-04T00:08:48.103023",
+      "metadata": {
+        "source": "dummy"
+      }
+    }
+  ]
+}

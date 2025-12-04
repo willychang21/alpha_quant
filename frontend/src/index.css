@@ -1,0 +1,197 @@
+@import url('https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Material Design 3 Color Tokens (Light Mode) */
+    /* Primary: Google Blue */
+    --primary: 217 89% 61%;
+    /* #4285F4 */
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary: Light Blue/Grey */
+    --secondary: 210 14% 95%;
+    --secondary-foreground: 217 89% 61%;
+
+    /* Backgrounds */
+    --background: 210 20% 98%;
+    /* #F8F9FA - Google Light Grey */
+    --foreground: 215 19% 35%;
+    /* #5F6368 - Google Dark Grey Text */
+
+    /* Surfaces */
+    --card: 0 0% 100%;
+    --card-foreground: 215 19% 35%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 19% 35%;
+
+    /* Accents */
+    --accent: 217 89% 61%;
+    --accent-foreground: 0 0% 100%;
+
+    /* States */
+    --muted: 210 14% 95%;
+    --muted-foreground: 215 14% 55%;
+
+    /* Functional */
+    --success: 146 70% 35%;
+    /* Google Green */
+    --success-foreground: 0 0% 100%;
+    --danger: 354 70% 54%;
+    /* Google Red */
+    --danger-foreground: 0 0% 100%;
+    --warning: 45 100% 51%;
+    /* Google Yellow */
+    --destructive: 354 70% 54%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 15% 91%;
+    --input: 214 15% 91%;
+    --ring: 217 89% 61%;
+
+    /* Shapes */
+    --radius: 1.5rem;
+    /* 24px - Material 3 Large */
+    --radius-sm: 0.75rem;
+    /* 12px */
+    --radius-md: 1rem;
+    /* 16px */
+    --radius-lg: 1.75rem;
+    /* 28px */
+    --radius-full: 9999px;
+
+    /* Shadows (Material Elevation) */
+    --shadow-sm: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
+    --shadow-md: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 2px 6px 2px rgba(60, 64, 67, 0.15);
+    --shadow-lg: 0 4px 8px 3px rgba(60, 64, 67, 0.15), 0 1px 3px 0 rgba(60, 64, 67, 0.3);
+    --shadow-xl: 0 8px 12px 6px rgba(60, 64, 67, 0.15), 0 4px 4px 0 rgba(60, 64, 67, 0.3);
+  }
+
+  .dark {
+    /* Material Design 3 Color Tokens (Dark Mode) */
+    --background: 220 12% 12%;
+    /* #202124 - Google Dark Background */
+    --foreground: 220 10% 90%;
+    /* #E8EAED */
+
+    --card: 220 12% 18%;
+    /* #2D2E31 */
+    --card-foreground: 220 10% 90%;
+    --popover: 220 12% 18%;
+    --popover-foreground: 220 10% 90%;
+
+    --primary: 215 75% 70%;
+    /* Lighter Blue for Dark Mode */
+    --primary-foreground: 220 12% 12%;
+
+    --secondary: 220 12% 24%;
+    --secondary-foreground: 215 75% 70%;
+
+    --muted: 220 12% 24%;
+    --muted-foreground: 215 10% 65%;
+
+    --accent: 215 75% 70%;
+    --accent-foreground: 220 12% 12%;
+
+    --success: 135 60% 60%;
+    --danger: 350 60% 60%;
+    --destructive: 350 60% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 10% 28%;
+    --input: 220 10% 28%;
+    --ring: 215 75% 70%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Google Sans', 'Roboto', sans-serif;
+  }
+
+  /* Typography Overrides */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-sans font-normal tracking-normal;
+    /* Google style isn't overly bold */
+  }
+
+  h1 {
+    @apply text-4xl;
+  }
+
+  h2 {
+    @apply text-2xl;
+  }
+
+  h3 {
+    @apply text-xl;
+  }
+
+  .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+@layer components {
+
+  /* Material Card */
+  .material-card {
+    @apply bg-card text-card-foreground rounded-[var(--radius)] shadow-sm border-none transition-shadow duration-200;
+  }
+
+  .material-card:hover {
+    @apply shadow-md;
+  }
+
+  /* Material Button */
+  .btn-material {
+    @apply rounded-full font-medium tracking-wide shadow-none hover:shadow-sm transition-all active:scale-[0.98];
+  }
+
+  /* Material Input */
+  .input-material {
+    @apply bg-secondary/50 border-b-2 border-transparent focus:border-primary rounded-t-lg rounded-b-none px-4 py-3 transition-colors;
+  }
+
+  /* Glass effect (optional, kept for some overlays) */
+  .glass-card {
+    @apply bg-white/90 dark:bg-[#2D2E31]/90 backdrop-blur-md border-none shadow-sm rounded-[var(--radius)];
+  }
+
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-muted-foreground/20 rounded-full hover:bg-muted-foreground/40 transition-colors;
+  }
+
+  /* Hide scrollbar utility */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
