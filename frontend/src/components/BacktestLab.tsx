@@ -60,9 +60,7 @@ interface BacktestResult {
 const COLORS = {
     strategy: '#22c55e',
     strategyGross: '#86efac',
-    SPY: '#3b82f6',
-    QQQ: '#a855f7',
-    custom: ['#f59e0b', '#ef4444', '#06b6d4', '#ec4899']
+    benchmark: ['#3b82f6', '#a855f7', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899']
 };
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -188,8 +186,11 @@ const BacktestLab: React.FC = () => {
         return Object.values(dateMap).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     }, [result, showGrossCurve]);
 
-    const spyMetrics = result?.benchmarks?.SPY?.metrics;
     const robustness = result?.robustness;
+
+    const getBenchmarkColor = (ticker: string, idx: number): string => {
+        return COLORS.benchmark[idx % COLORS.benchmark.length];
+    };
 
     return (
         <div className="p-6 space-y-6">
@@ -403,7 +404,7 @@ const BacktestLab: React.FC = () => {
                                         <Line type="monotone" dataKey="Net" stroke={COLORS.strategy} strokeWidth={3} dot={false} name="Strategy (Net)" />
                                         {showGrossCurve && <Line type="monotone" dataKey="Gross" stroke={COLORS.strategyGross} strokeWidth={2} dot={false} strokeDasharray="5 5" name="Strategy (Gross)" />}
                                         {Object.keys(result.benchmarks).map((ticker, idx) => (
-                                            <Line key={ticker} type="monotone" dataKey={ticker} stroke={COLORS[ticker as keyof typeof COLORS] || COLORS.custom[idx % 4]} strokeWidth={2} dot={false} strokeDasharray={ticker !== 'SPY' ? '5 5' : undefined} />
+                                            <Line key={ticker} type="monotone" dataKey={ticker} stroke={getBenchmarkColor(ticker, idx)} strokeWidth={2} dot={false} strokeDasharray={ticker !== 'SPY' ? '5 5' : undefined} />
                                         ))}
                                     </LineChart>
                                 </ResponsiveContainer>
