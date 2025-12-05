@@ -1,87 +1,148 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { RealTimeTicker } from '@/components/RealTimeTicker';
-import { MLSignalCard } from '@/components/MLSignalCard';
+import { RegimeBanner } from '@/components/RegimeBanner';
+import { FactorRadar } from '@/components/FactorRadar';
+import { SmartTradeTable } from '@/components/SmartTradeTable';
 import { RiskMonitor } from '@/components/RiskMonitor';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { Activity } from 'lucide-react';
+import { Activity, RefreshCw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+
+interface DashboardSummary {
+    regime: {
+        state: 'AGGRESSIVE' | 'NEUTRAL' | 'DEFENSIVE';
+        confidence_score: number;
+        confidence_multiplier: number;
+        base_target_vol: number;
+        adjusted_target_vol: number;
+    };
+    attribution: {
+        value: number;
+        momentum: number;
+        quality: number;
+        low_risk: number;
+        sentiment: number;
+    };
+    trades: Array<{
+        ticker: string;
+        name: string | null;
+        sector: string;
+        alpha_score: number;
+        conviction: 'High' | 'Medium' | 'Low';
+        raw_weight: number;
+        final_weight: number;
+        shares: number;
+        value: number;
+        reason: string;
+    }>;
+    generated_at: string;
+}
 
 const AdvancedDashboard: React.FC = () => {
+    const [data, setData] = useState<DashboardSummary | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    const fetchData = async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const response = await fetch('/api/quant/dashboard/summary');
+            if (!response.ok) throw new Error('Failed to fetch dashboard data');
+            const result = await response.json();
+            setData(result);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Unknown error');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchData();
+    }, []);
+
+    if (loading) {
+        return (
+            <div className="min-h-screen bg-background flex items-center justify-center">
+                <div className="text-center space-y-4">
+                    <RefreshCw className="w-12 h-12 animate-spin text-primary mx-auto" />
+                    <p className="text-muted-foreground">Loading Quant Command Center...</p>
+                </div>
+            </div>
+        );
+    }
+
+    if (error || !data) {
+        return (
+            <div className="min-h-screen bg-background flex items-center justify-center">
+                <Card className="max-w-md">
+                    <CardContent className="p-6 text-center space-y-4">
+                        <p className="text-destructive">{error || 'No data available'}</p>
+                        <Button onClick={fetchData}>Retry</Button>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
+
     return (
         <div className="min-h-screen bg-background text-foreground flex flex-col">
             {/* Top Bar: Real-Time Ticker */}
             <RealTimeTicker />
 
             <div className="flex-1 p-6 space-y-6">
-                <div className="flex justify-between items-center mb-6">
+                {/* Header with Refresh */}
+                <div className="flex justify-between items-center">
                     <div>
-                        <h1 className="text-3xl font-bold tracking-tight">Quant Command Center</h1>
-                        <p className="text-muted-foreground">Tier-3 Enterprise System • Live</p>
+                        <h1 className="text-3xl font-bold tracking-tight">Quant Command Center 2.0</h1>
+                        <p className="text-muted-foreground">
+                            Institutional Decision Support • Last updated: {new Date(data.generated_at).toLocaleTimeString()}
+                        </p>
                     </div>
-                    <div className="flex items-center space-x-2">
-                        <span className="flex h-3 w-3 relative">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-                        </span>
-                        <span className="text-sm font-medium text-green-500">System Operational</span>
-                    </div>
+                    <Button variant="outline" onClick={fetchData} disabled={loading}>
+                        <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+                        Refresh
+                    </Button>
                 </div>
 
-                {/* Main Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-12 gap-6 h-[600px]">
-                    
-                    {/* Left Column: ML Signals (4 cols) */}
-                    <div className="md:col-span-4 h-full">
-                        <MLSignalCard />
+                {/* Regime HUD */}
+                <RegimeBanner regime={data.regime} />
+
+                {/* Main Grid: Factor Attribution + Risk Monitor */}
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+                    {/* Left: Factor Attribution (6 cols) */}
+                    <div className="md:col-span-6">
+                        <FactorRadar attribution={data.attribution} />
                     </div>
 
-                    {/* Middle Column: Market Overview / Execution (4 cols) */}
-                    <div className="md:col-span-4 h-full flex flex-col space-y-6">
-                        {/* Execution Monitor Placeholder */}
-                        <Card className="flex-1 border-l-4 border-l-blue-500">
-                            <CardHeader>
-                                <div className="flex items-center space-x-2">
-                                    <Activity className="w-5 h-5 text-blue-500" />
-                                    <CardTitle>Execution Algo (VWAP)</CardTitle>
-                                </div>
-                            </CardHeader>
-                            <CardContent>
-                                <div className="space-y-4">
-                                    <div className="flex justify-between text-sm">
-                                        <span>Progress</span>
-                                        <span>45%</span>
-                                    </div>
-                                    <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
-                                        <div className="bg-blue-500 h-full w-[45%] animate-pulse"></div>
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground mt-4">
-                                        <div>Target: 10,000 shrs</div>
-                                        <div>Filled: 4,500 shrs</div>
-                                        <div>Avg Price: $152.45</div>
-                                        <div>Slippage: 0.5 bps</div>
-                                    </div>
-                                </div>
-                            </CardContent>
-                        </Card>
-                        
-                        {/* System Health / Logs Placeholder */}
-                        <Card className="h-1/3">
-                            <CardHeader className="py-3">
-                                <CardTitle className="text-sm">System Logs</CardTitle>
-                            </CardHeader>
-                            <CardContent className="text-xs font-mono text-muted-foreground space-y-1">
-                                <p>[20:05:12] Connected to WebSocket stream.</p>
-                                <p>[20:05:15] Received 12 new ticks.</p>
-                                <p>[20:05:18] ML Model updated (v2.1).</p>
-                                <p>[20:05:20] Risk check passed.</p>
-                            </CardContent>
-                        </Card>
-                    </div>
-
-                    {/* Right Column: Risk Management (4 cols) */}
-                    <div className="md:col-span-4 h-full">
+                    {/* Right: Risk Monitor (6 cols) */}
+                    <div className="md:col-span-6">
                         <RiskMonitor />
                     </div>
                 </div>
+
+                {/* Smart Execution Table */}
+                <SmartTradeTable 
+                    trades={data.trades} 
+                    confidenceMultiplier={data.regime.confidence_multiplier}
+                />
+
+                {/* System Logs */}
+                <Card className="h-[150px]">
+                    <CardHeader className="py-3">
+                        <div className="flex items-center space-x-2">
+                            <Activity className="w-4 h-4 text-blue-500" />
+                            <CardTitle className="text-sm">System Activity</CardTitle>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="text-xs font-mono text-muted-foreground space-y-1 overflow-y-auto max-h-[80px]">
+                        <p>[{new Date().toLocaleTimeString()}] Dashboard summary fetched successfully.</p>
+                        <p>[{new Date().toLocaleTimeString()}] Regime detected: {data.regime.state}</p>
+                        <p>[{new Date().toLocaleTimeString()}] {data.trades.length} positions loaded.</p>
+                        <p>[{new Date().toLocaleTimeString()}] Confidence multiplier: {data.regime.confidence_multiplier}x</p>
+                    </CardContent>
+                </Card>
             </div>
         </div>
     );

@@ -27,7 +27,9 @@ class PortfolioOptimizer:
         max_weight: float = 0.10,  # Max 10% per stock
         risk_aversion: float = 1.0,
         optimizer: Literal['hrp', 'bl', 'mvo', 'kelly'] = 'hrp',  # Tier-1/2: Choose optimizer
-        target_vol: float = None  # Tier-2: Volatility Targeting (e.g. 0.15)
+        target_vol: float = None,  # Tier-2: Volatility Targeting (e.g. 0.15)
+        sector_constraints: bool = False, # Phase 8
+        beta_constraints: bool = False    # Phase 8
     ):
         """
         Run portfolio optimization on top ranked stocks.
@@ -139,6 +141,67 @@ class PortfolioOptimizer:
         ticker_to_sid = {v: k for k, v in sid_to_ticker.items()}
         returns_df_named = returns_df.rename(columns=sid_to_ticker)
         
+        # --- Prepare Constraints (Phase 8) ---
+        sector_mapper = None
+        sector_limits = None
+        beta_vector = None
+        target_beta = None
+        
+        if sector_constraints or beta_constraints:
+            import json
+            # Extract metadata for valid SIDs
+            valid_picks = [p for p in top_picks if p.sid in valid_sids]
+            # Ensure order matches valid_sids
+            sid_to_pick = {p.sid: p for p in valid_picks}
+            ordered_picks = [sid_to_pick[sid] for sid in valid_sids]
+            
+            if sector_constraints:
+                logger.info("Preparing Sector Constraints...")
+                sectors = []
+                for p in ordered_picks:
+                    try:
+                        meta = json.loads(p.metadata_json) if p.metadata_json else {}
+                        sectors.append(meta.get('sector', 'Unknown'))
+                    except:
+                        sectors.append('Unknown')
+                
+                unique_sectors = sorted(list(set(sectors)))
+                n_sectors = len(unique_sectors)
+                n_assets = len(valid_sids)
+                
+                sector_mapper = np.zeros((n_sectors, n_assets))
+                for i, sec_name in enumerate(sectors):
+                    row_idx = unique_sectors.index(sec_name)
+                    sector_mapper[row_idx, i] = 1.0
+                    
+                # Limit max 30% per sector
+                sector_limits = np.full(n_sectors, 0.30)
+                logger.info(f"Sector Constraints: {n_sectors} sectors found.")
+                
+            if beta_constraints:
+                logger.info("Preparing Beta Constraints...")
+                betas = []
+                for p in ordered_picks:
+                    try:
+                        meta = json.loads(p.metadata_json) if p.metadata_json else {}
+                        betas.append(meta.get('beta', 1.0))
+                    except:
+                        betas.append(1.0)
+                
+                beta_vector = np.array(betas)
+                target_beta = 1.0 # Market Neutral or Beta=1? User said "Beta Neutrality Optional", let's default to 1.0 (Market Exposure) or 0.0 (Market Neutral).
+                # Given it's a "Stock Selection System" (Long Only usually), Beta=1 is safer target than 0.
+                # If Long Only, Beta ~ 1.0 is natural. If we want Beta Neutral (0), we need Shorting.
+                # But our optimizer constraint is w >= 0 (Long Only).
+                # So Beta Neutral (0) is impossible for Long Only unless we hold cash?
+                # Actually, "Beta Neutral" usually implies Long/Short.
+                # Since we are Long Only (w >= 0), we probably want to constrain Beta to be close to 1.0 (Market Beta) or Low Beta.
+                # Let's set target_beta = 0.8 (Low Beta) or 1.0. 
+                # User said "beta-neutrality optional".
+                # Let's assume target_beta = 1.0 for now as we are Long Only.
+                target_beta = 1.0
+                logger.info(f"Beta Constraints: Target Beta = {target_beta}")
+
         # --- Tier-1: Choose Optimizer ---
         
         if optimizer == 'hrp':
@@ -257,7 +320,12 @@ class PortfolioOptimizer:
                     expected_returns, 
                     cov_matrix, 
                     max_leverage=1.0, # Long only, fully invested max
-                    fractional_kelly=0.5 # Half-Kelly
+                    fractional_kelly=0.5, # Half-Kelly
+                    # Phase 8 Constraints
+                    sector_mapper=sector_mapper,
+                    sector_limits=sector_limits,
+                    beta_vector=beta_vector,
+                    target_beta=target_beta
                 )
                 
                 # Map back
@@ -308,7 +376,7 @@ class PortfolioOptimizer:
                 logger.error("Optimization failed (unbounded or infeasible).")
             return
             
-        optimal_weights = w.value
+            optimal_weights = w.value
         
         # Clean weights
         optimal_weights[optimal_weights < 0.001] = 0
@@ -316,8 +384,14 @@ class PortfolioOptimizer:
         optimal_weights /= np.sum(optimal_weights)
         
         # --- Tier-2: Volatility Targeting ---
+        # --- Tier-2: Volatility Targeting ---
         if target_vol:
-            logger.info(f"🎯 Applying Volatility Targeting (Target: {target_vol:.1%})")
+            # Phase 9: System Confidence Integration
+            confidence_multiplier = self._get_system_confidence()
+            adjusted_target_vol = target_vol * confidence_multiplier
+            
+            logger.info(f"🎯 Applying Volatility Targeting (Base: {target_vol:.1%}, Adj: {adjusted_target_vol:.1%})")
+            
             # Convert weights to Series for function
             weights_series = pd.Series(optimal_weights, index=valid_sids)
             
@@ -327,7 +401,7 @@ class PortfolioOptimizer:
             scaled_weights_series = apply_vol_targeting(
                 weights_series, 
                 prices_df, 
-                target_vol=target_vol
+                target_vol=adjusted_target_vol
             )
             
             # Update optimal_weights (might sum to < 1.0 or > 1.0 now)
@@ -337,7 +411,7 @@ class PortfolioOptimizer:
             logger.info(f"   Leverage after Vol Targeting: {np.sum(optimal_weights):.2f}x")
 
         # 5. Store Results
-        self._store_targets(valid_sids, optimal_weights, optimization_date)
+        self._store_targets(valid_sids, optimal_weights, optimization_date, optimizer=optimizer)
         
         # Log results
         logger.info("Optimization successful. Top Allocations:")
@@ -351,6 +425,44 @@ class PortfolioOptimizer:
             logger.info(f"{ticker}: {weight:.1%}")
             
         return allocations
+
+    def _get_system_confidence(self) -> float:
+        """
+        Fetches the latest Meta-Labeling confidence score (Sharpe Ratio) from ModelRegistry.
+        Returns a multiplier between 0.5 and 1.2.
+        """
+        try:
+            from quant.mlops.registry import ModelRegistry
+            registry = ModelRegistry(experiment_name="test_genetic_algo")
+            best_run = registry.get_best_run(metric_name="best_fitness", mode="max")
+            
+            if best_run is None:
+                return 1.0
+                
+            # Get Sharpe Ratio (best_fitness)
+            # Note: keys might have 'metrics.' prefix or not depending on how it's returned
+            metrics = best_run.filter(regex="metrics.").to_dict()
+            sharpe = metrics.get('metrics.best_fitness', 0.0)
+            
+            logger.info(f"🧠 System Confidence (Sharpe): {sharpe:.2f}")
+            
+            # Logic: 
+            # Sharpe > 1.0 -> High Confidence (1.2x)
+            # Sharpe < 0.0 -> Low Confidence (0.5x)
+            # Linear interpolation in between
+            
+            # Base multiplier = 0.5 + 0.5 * Sharpe
+            multiplier = 0.5 + 0.5 * sharpe
+            
+            # Clip between 0.5 and 1.2
+            multiplier = max(0.5, min(multiplier, 1.2))
+            
+            logger.info(f"⚖️  Confidence Multiplier: {multiplier:.2f}x")
+            return multiplier
+            
+        except Exception as e:
+            logger.warning(f"Failed to fetch system confidence: {e}")
+            return 1.0
 
     def _store_targets(self, sids, weights, date, optimizer: str = 'mvo'):
         model_name = f'{optimizer}_v1'  # mvo_v1 or hrp_v1

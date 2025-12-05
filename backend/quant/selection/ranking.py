@@ -13,6 +13,8 @@ from quant.features.accruals import AccrualsAnomaly
 from quant.features.ivol import IdiosyncraticVolatility, AmihudIlliquidity
 from quant.features.pead import PostEarningsAnnouncementDrift, EarningsMomentum
 from quant.features.sentiment import NewsSentimentFactor
+from quant.features.revisions import AnalystRevisions
+from quant.features.valuation_composite import ValuationComposite
 from quant.regime.hmm import RegimeDetector, DynamicFactorWeights
 from datetime import date
 import pandas as pd
@@ -51,6 +53,10 @@ class RankingEngine:
         
         # P4: NLP Sentiment
         self.sentiment_gen = NewsSentimentFactor(lookback_days=7, max_articles=5)
+        
+        # Phase 8: Weekly System Factors
+        self.revisions_gen = AnalystRevisions()
+        self.val_composite_gen = ValuationComposite()
         
         # Regime Detection
         self.regime_detector = RegimeDetector(n_states=2, lookback=252)
@@ -106,6 +112,20 @@ class RankingEngine:
         except Exception as e:
             logger.error(f"Failed to fetch SPY data: {e}")
             spy_history = pd.Series()
+            
+        # Fetch Risk Free Rate (^TNX)
+        risk_free_rate = 0.04
+        try:
+            tnx = yf.download("^TNX", period="5d", progress=False)
+            if not tnx.empty:
+                # TNX is in percent (e.g. 4.2), convert to decimal 0.042
+                if isinstance(tnx, pd.DataFrame):
+                    val = tnx['Close'].iloc[-1]
+                    if isinstance(val, pd.Series): val = val.iloc[0]
+                    risk_free_rate = float(val) / 100.0
+                logger.info(f"Risk Free Rate (^TNX): {risk_free_rate:.2%}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch ^TNX, using default 4%: {e}")
 
         all_tickers = [sec.ticker for sec in securities]
         logger.info(f"Processing {len(all_tickers)} tickers in chunks...")
@@ -155,6 +175,9 @@ class RankingEngine:
                         ticker_data = {}
                         try:
                             ticker_data = await self.market_data.get_ticker_data(sec.ticker)
+                            # Fetch Estimates for Revisions
+                            estimates = await self.market_data.get_estimates(sec.ticker)
+                            ticker_data['estimates'] = estimates
                         except:
                             pass
                         
@@ -167,6 +190,7 @@ class RankingEngine:
                         # 2. Betting Against Beta
                         bab_score = self.bab_gen.compute(history, benchmark_history=spy_history)
                         if isinstance(bab_score, pd.Series): bab_score = float(bab_score.iloc[-1]) if not bab_score.empty else 0.0
+                        raw_beta = -bab_score if bab_score != 0.0 else 1.0 # Default to 1.0 if missing
                         
                         # 3. Quality Minus Junk (Composite)
                         # QMJ returns a Series of dicts or just a Series with one dict?
@@ -221,6 +245,13 @@ class RankingEngine:
                                 sentiment_score = float(sentiment_raw.iloc[-1])
                         except Exception as e:
                             logger.debug(f"Sentiment calculation failed for {sec.ticker}: {e}")
+                            
+                        # 7. Analyst Revisions (Phase 8)
+                        revisions_score = self.revisions_gen.compute(ticker_data)
+                        
+                        # 8. Valuation Composite (Phase 8)
+                        val_comp = self.val_composite_gen.compute(ticker_data, upside, risk_free_rate)
+                        val_comp_score = val_comp.get('score', 0.0)
                         
                         # Construct Result Dict
                         result = {
@@ -236,7 +267,12 @@ class RankingEngine:
                             # QMJ Components
                             'roe': qmj_components.get('roe', 0.0),
                             'gross_margin': qmj_components.get('gross_margin', 0.0),
-                            'debt_to_equity': qmj_components.get('debt_to_equity', 0.0)
+                            'debt_to_equity': qmj_components.get('debt_to_equity', 0.0),
+                            # Phase 8
+                            'revisions': revisions_score,
+                            'valuation_composite': val_comp_score,
+                            'earnings_yield': val_comp.get('earnings_yield', 0.0),
+                            'yield_spread': val_comp.get('yield_spread', 0.0)
                         }
                         
                         return result
@@ -271,6 +307,10 @@ class RankingEngine:
         # --- Tier-1: Dynamic Factor Weighting based on Regime ---
         # Get regime-adaptive weights
         weights = DynamicFactorWeights.get_weights(self.current_regime)
+        # Add weights for new factors if not present in DynamicFactorWeights
+        if 'revisions' not in weights: weights['revisions'] = 0.10
+        if 'valuation_composite' not in weights: weights['valuation_composite'] = 0.15 # Overrides 'upside' weight partially?
+        
         logger.info(f"📊 Using {self.current_regime} regime weights: {weights}")
         
         # Note: process_factors creates 'z_{factor}' and 'z_{factor}_neutral'
@@ -279,10 +319,11 @@ class RankingEngine:
         df['score'] = (
             weights['vsm'] * df.get('z_volatility_scaled_momentum_neutral', 0) +
             weights['bab'] * df.get('z_betting_against_beta_neutral', 0) +
-            weights['qmj'] * df.get('quality', 0) +  # Quality is already a composite Z-score from pipeline
-            weights['upside'] * df.get('z_upside_neutral', 0) +
-            weights.get('pead', 0) * df.get('z_pead_neutral', df.get('pead', 0)) +  # P3: PEAD
-            weights.get('sentiment', 0) * df.get('z_sentiment_neutral', df.get('sentiment', 0))  # P4: Sentiment
+            weights['qmj'] * df.get('quality', 0) +
+            weights['upside'] * df.get('z_valuation_composite_neutral', df.get('z_upside_neutral', 0)) + # Use Composite if available
+            weights.get('pead', 0) * df.get('z_pead_neutral', df.get('pead', 0)) +
+            weights.get('sentiment', 0) * df.get('z_sentiment_neutral', df.get('sentiment', 0)) +
+            weights.get('revisions', 0) * df.get('z_revisions_neutral', 0) # New Revisions Factor
         ).fillna(0.0)
         
         # Rank
@@ -317,7 +358,13 @@ class RankingEngine:
                 'z_sentiment': row.get('z_sentiment_neutral', row.get('sentiment', 0)),  # P4: Sentiment z-score
                 # Tier-1: Regime info
                 'regime': self.current_regime,
-                'weights_used': DynamicFactorWeights.get_weights(self.current_regime)
+                'weights_used': DynamicFactorWeights.get_weights(self.current_regime),
+                'sector': row.get('sector', 'Unknown'),
+                'beta': row.get('raw_beta', 1.0), # Store raw beta
+                'revisions': row.get('revisions', 0),
+                'val_composite': row.get('valuation_composite', 0),
+                'z_revisions': row.get('z_revisions_neutral', 0),
+                'z_val_composite': row.get('z_valuation_composite_neutral', 0)
             }
             
             signals.append(ModelSignals(

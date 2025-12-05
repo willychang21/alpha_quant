@@ -9,8 +9,8 @@ import PortfolioEditor from './components/PortfolioEditor';
 import PortfolioSelector from './components/PortfolioSelector';
 import DcaAnalysisComponent from './components/DCAAnalysis';
 import FundamentalAnalysis from './components/FundamentalAnalysis';
-import { QuantDashboard } from './components/QuantDashboard';
-import SignalsDashboard from './components/SignalsDashboard';
+import ResearchLab from './components/ResearchLab';
+import BacktestLab from './components/BacktestLab';
 import AdvancedDashboard from './pages/AdvancedDashboard';
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -48,8 +48,8 @@ function App() {
     else if (path === 'backtest') setActiveTab('backtest');
     else if (path === 'fundamental') setActiveTab('fundamental');
     else if (path === 'bubble') setActiveTab('bubble');
-    else if (path === 'quant') setActiveTab('quant');
-    else if (path === 'signals') setActiveTab('signals');
+    else if (path === 'research') setActiveTab('research');
+    else if (path === 'backtestlab') setActiveTab('backtestlab');
     else if (path === 'advanced') setActiveTab('advanced');
   }, [location]);
 
@@ -216,7 +216,7 @@ function App() {
         <div className="space-y-6">
           <div className="relative">
             <div className="p-1.5 h-auto flex flex-row bg-muted/50 backdrop-blur-sm rounded-full relative z-10 w-fit mx-auto sm:mx-0 border border-white/10">
-              {['pl', 'matrix', 'dca', 'backtest', 'fundamental', 'bubble', 'quant', 'signals', 'advanced'].map((tab) => (
+              {['pl', 'matrix', 'dca', 'backtest', 'fundamental', 'bubble', 'research', 'backtestlab', 'advanced'].map((tab) => (
                 <button
                   key={tab}
                   onClick={() => handleTabChange(tab)}
@@ -238,8 +238,8 @@ function App() {
                     {tab === 'backtest' && 'Performance'}
                     {tab === 'fundamental' && 'Fundamental'}
                     {tab === 'bubble' && 'Market Bubble'}
-                    {tab === 'quant' && 'Quant Strategy'}
-                    {tab === 'signals' && 'Trading Signals'}
+                    {tab === 'research' && 'Research Lab'}
+                    {tab === 'backtestlab' && 'Backtest Lab'}
                     {tab === 'advanced' && 'Live Dashboard'}
                   </span>
                 </button>
@@ -350,29 +350,29 @@ function App() {
                   </motion.div>
                 } />
 
-                <Route path="/quant" element={
+                <Route path="/research" element={
                   <motion.div
-                    key="quant"
+                    key="research"
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -20 }}
                     transition={{ duration: 0.3 }}
                     className="space-y-6"
                   >
-                    <QuantDashboard />
+                    <ResearchLab />
                   </motion.div>
                 } />
 
-                <Route path="/signals" element={
+                <Route path="/backtestlab" element={
                   <motion.div
-                    key="signals"
+                    key="backtestlab"
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -20 }}
                     transition={{ duration: 0.3 }}
                     className="space-y-6"
                   >
-                    <SignalsDashboard />
+                    <BacktestLab />
                   </motion.div>
                 } />
 

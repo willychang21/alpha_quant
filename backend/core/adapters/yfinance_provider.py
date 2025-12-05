@@ -141,6 +141,34 @@ class YFinanceProvider(MarketDataProvider):
         self._set_cache(cache_key, history, self.TTL_PRICE)
         return history
 
+    async def get_estimates(self, ticker: str) -> pd.DataFrame:
+        """
+        Fetches earnings estimates for the ticker.
+        """
+        loop = asyncio.get_running_loop()
+        t = yf.Ticker(ticker)
+        return await self._fetch_estimates(loop, t, ticker)
+
+    async def _fetch_estimates(self, loop, ticker_obj, ticker_symbol) -> pd.DataFrame:
+        cache_key = f"est_{ticker_symbol}"
+        cached = self._get_from_cache(cache_key)
+        if cached is not None:
+            return cached
+            
+        def fetch():
+            # yfinance property is earnings_estimate
+            try:
+                return ticker_obj.earnings_estimate
+            except Exception:
+                return pd.DataFrame()
+            
+        estimates = await loop.run_in_executor(self._executor, fetch)
+        if estimates is None:
+            estimates = pd.DataFrame()
+            
+        self._set_cache(cache_key, estimates, self.TTL_FINANCIALS)
+        return estimates
+
     def _get_from_cache(self, key: str) -> Optional[Any]:
         if key in self._cache:
             if datetime.now() < self._cache_expiry[key]:

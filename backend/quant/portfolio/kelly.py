@@ -10,7 +10,13 @@ def optimize_multivariate_kelly(
     cov_matrix: np.ndarray, 
     risk_free_rate: float = 0.0, 
     max_leverage: float = 1.0, 
-    fractional_kelly: float = 0.5
+    fractional_kelly: float = 0.5,
+    # New Constraints (Phase 8)
+    sector_mapper: np.ndarray = None, # (n_sectors, n_assets) binary matrix
+    sector_limits: np.ndarray = None, # (n_sectors, ) max weights
+    beta_vector: np.ndarray = None,   # (n_assets, ) betas
+    target_beta: float = None,        # e.g. 0.0 for neutral, 1.0 for market
+    beta_tolerance: float = 0.1
 ) -> np.ndarray:
     """
     Solves the Multivariate Kelly Criterion problem using Convex Optimization.
@@ -24,6 +30,11 @@ def optimize_multivariate_kelly(
         risk_free_rate (float): The risk-free rate.
         max_leverage (float): Maximum allowed leverage (sum of absolute weights).
         fractional_kelly (float): Scalar to reduce variance (e.g., 0.5 for Half-Kelly).
+        sector_mapper (np.ndarray): Binary matrix mapping assets to sectors.
+        sector_limits (np.ndarray): Max weight per sector.
+        beta_vector (np.ndarray): Vector of asset betas.
+        target_beta (float): Target portfolio beta.
+        beta_tolerance (float): Allowed deviation from target beta (+/-).
         
     Returns:
         np.array: Optimal asset weights.
@@ -37,13 +48,6 @@ def optimize_multivariate_kelly(
     w = cp.Variable(n_assets)
     
     # Objective: Maximize expected log-wealth growth (Taylor expansion approx)
-    # Maximize: w^T * mu - 0.5 * w^T * Sigma * w
-    # Note: This is equivalent to maximizing the Sharpe Ratio squared if unconstrained?
-    # No, Kelly maximizes growth. MVO maximizes utility.
-    # Kelly is equivalent to MVO with Risk Aversion (lambda) = 1?
-    # Actually, Full Kelly corresponds to maximizing Log Utility.
-    # Taylor expansion of Log Utility is Mean - 0.5 * Variance.
-    
     port_return = w @ mu
     port_risk = cp.quad_form(w, cov_matrix)
     
@@ -51,8 +55,22 @@ def optimize_multivariate_kelly(
     
     constraints = [
         cp.sum(cp.abs(w)) <= max_leverage,  # Gross leverage constraint
-        w >= 0                              # Long-only constraint (optional, but safer for now)
+        w >= 0                              # Long-only constraint
     ]
+    
+    # Phase 8: Sector Constraints
+    if sector_mapper is not None and sector_limits is not None:
+        # sector_mapper is (n_sectors, n_assets)
+        # w is (n_assets, )
+        # sector_weights = sector_mapper @ w -> (n_sectors, )
+        sector_weights = sector_mapper @ w
+        constraints.append(sector_weights <= sector_limits)
+        
+    # Phase 8: Beta Constraints
+    if beta_vector is not None and target_beta is not None:
+        portfolio_beta = w @ beta_vector
+        constraints.append(portfolio_beta >= target_beta - beta_tolerance)
+        constraints.append(portfolio_beta <= target_beta + beta_tolerance)
     
     problem = cp.Problem(objective, constraints)
     
@@ -66,8 +84,6 @@ def optimize_multivariate_kelly(
             return np.zeros(n_assets)
             
         # Apply Fractional Kelly Scaling
-        # We scale the *optimal* weights by the fraction.
-        # This reduces the bet size, moving us closer to the risk-free asset (cash).
         optimal_weights = w.value * fractional_kelly
         
         # Clean small weights

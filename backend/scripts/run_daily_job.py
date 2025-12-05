@@ -29,24 +29,40 @@ async def main():
         if top_picks is not None:
             logger.info(f"Top Picks:\n{top_picks[['ticker', 'score', 'rank']]}")
             
-        # 2. Portfolio Optimization
-        logger.info("Running Portfolio Optimization (MVO)...")
+        # 2. Portfolio Optimization (Tier-2: Kelly + Vol Targeting)
+        logger.info("Running Portfolio Optimization (Tier-2: Kelly + Vol Targeting)...")
         from quant.portfolio.optimizer import PortfolioOptimizer
         optimizer = PortfolioOptimizer(db)
-        allocations = optimizer.run_optimization(date.today())
+        
+        # Switch to Kelly Optimization with 15% Volatility Target
+        allocations = optimizer.run_optimization(
+            date.today(), 
+            optimizer='kelly', 
+            target_vol=0.15
+        )
         
         if allocations:
             logger.info("Optimization Complete.")
+            
+            # 3. Execution Schedule (Tier-3: VWAP)
+            logger.info("Generating Execution Schedule (Tier-3: VWAP)...")
+            from quant.execution.algo import VWAPExecution
+            
+            # Generate schedule for the top allocation
+            top_ticker, top_weight = allocations[0]
+            # Assume $1M portfolio, price $100 (simplified for log)
+            target_shares = int((1_000_000 * top_weight) / 100) 
+            
+            vwap_algo = VWAPExecution()
+            schedule = vwap_algo.generate_schedule(total_shares=target_shares)
+            logger.info(f"VWAP Schedule for {top_ticker} ({target_shares} shares):\n{schedule.head()}")
+            
         else:
             logger.warning("Optimization returned no allocations.")
             
-        # 3. Register Signals (Optional, if we want to push to the new Signals table as well)
-        # The RankingEngine currently writes to ModelSignals (legacy table?).
-        # We should probably migrate that to the new Signal table eventually.
-        # For now, let's log success.
-        
+        # 4. Register Signals / Monitoring
         monitor.record_success("daily_job")
-        logger.info("Daily Job Completed Successfully.")
+        logger.info("Daily Job Completed Successfully (Tier-1 -> Tier-2 -> Tier-3).")
         
     except Exception as e:
         logger.error(f"Daily Job Failed: {e}")
