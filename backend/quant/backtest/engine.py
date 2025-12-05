@@ -1,9 +1,11 @@
 from sqlalchemy.orm import Session
 from quant.data.models import Security, MarketDataDaily
+from quant.data.data_provider import DataProvider, SQLiteDataProvider, create_data_provider
 from quant.selection.ranking import RankingEngine
 from quant.portfolio.optimizer import PortfolioOptimizer
 from quant.backtest.execution.slippage import SlippageModel, FixedSlippage, VolumeShareSlippage
 from datetime import date, timedelta
+from typing import Optional, Union
 import pandas as pd
 import numpy as np
 import logging
@@ -11,25 +13,59 @@ import logging
 logger = logging.getLogger(__name__)
 
 class BacktestEngine:
+    """
+    Production-grade backtesting engine.
+    
+    Supports both legacy SQLAlchemy sessions and new DataProvider abstraction.
+    Uses DataProvider for efficient price lookups with caching.
+    
+    Usage:
+        # New way (recommended)
+        provider = create_data_provider(provider_type='parquet', data_lake_path='...')
+        engine = BacktestEngine(data_provider=provider)
+        
+        # Legacy way (backward compatible)
+        engine = BacktestEngine(db=session)
+    """
+    
     def __init__(
         self, 
-        db: Session, 
+        db: Session = None,
+        data_provider: DataProvider = None,
         initial_capital: float = 100000.0,
         slippage_model: SlippageModel = None,
-        commission_rate: float = 0.0 # e.g. 0.0005 for 5bps
+        commission_rate: float = 0.0  # e.g. 0.0005 for 5bps
     ):
-        self.db = db
-        self.ranking_engine = RankingEngine(db)
-        self.optimizer = PortfolioOptimizer(db)
+        # Support both old and new interface
+        if data_provider is not None:
+            self.data_provider = data_provider
+            self.db = None
+        elif db is not None:
+            self.data_provider = SQLiteDataProvider(db)
+            self.db = db
+        else:
+            raise ValueError("Either 'db' or 'data_provider' must be provided")
+        
+        # For ranking and optimization, we still need db for now
+        # TODO: Migrate these to use DataProvider as well
+        self._legacy_db = db
+        if db is not None:
+            self.ranking_engine = RankingEngine(db)
+            self.optimizer = PortfolioOptimizer(db)
+        else:
+            # If using DataProvider without db, need to handle differently
+            self.ranking_engine = None
+            self.optimizer = None
         
         self.initial_capital = initial_capital
         self.cash = initial_capital
-        self.holdings = {} # ticker -> quantity
+        self.holdings = {}  # ticker -> quantity
         
         self.slippage_model = slippage_model if slippage_model else FixedSlippage(spread_bps=10)
         self.commission_rate = commission_rate
         
         self.history = []
+
 
     def run_backtest(self, start_date: date, end_date: date, rebalance_freq_days: int = 30):
         """
@@ -165,19 +201,13 @@ class BacktestEngine:
             "holdings_count": len(self.holdings)
         })
 
-    def _get_price(self, ticker: str, date: date):
-        # Helper to get price from DB
-        # Optimization: Cache prices or fetch in bulk if slow
-        sec = self.db.query(Security).filter(Security.ticker == ticker).first()
-        if not sec:
-            return None
-            
-        record = self.db.query(MarketDataDaily)\
-            .filter(MarketDataDaily.sid == sec.sid, MarketDataDaily.date <= date)\
-            .order_by(MarketDataDaily.date.desc())\
-            .first()
-            
-        # Fallback: If DB missing, maybe try YFinanceProvider?
-        # For backtest speed, we really should have data in DB.
+    def _get_price(self, ticker: str, target_date: date):
+        """
+        Get price using DataProvider (with caching).
         
-        return record.adj_close if record else None
+        Uses the new DataProvider abstraction which handles:
+        - Efficient caching for sequential backtest queries
+        - Point-in-Time correct data access
+        """
+        return self.data_provider.get_price(ticker, target_date)
+

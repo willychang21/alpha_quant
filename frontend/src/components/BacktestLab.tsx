@@ -188,7 +188,7 @@ const BacktestLab: React.FC = () => {
 
     const robustness = result?.robustness;
 
-    const getBenchmarkColor = (ticker: string, idx: number): string => {
+    const getBenchmarkColor = (_: string, idx: number): string => {
         return COLORS.benchmark[idx % COLORS.benchmark.length];
     };
 

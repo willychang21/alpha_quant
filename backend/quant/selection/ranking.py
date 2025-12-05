@@ -336,13 +336,14 @@ class RankingEngine:
         return df.head(20)
 
     def _store_signals(self, df: pd.DataFrame, ranking_date: date):
-        # Clear existing for this date/model
-        self.db.query(ModelSignals).filter(
-            ModelSignals.date == ranking_date,
-            ModelSignals.model_name == 'ranking_v3'  # Version 3 with Tier-1 upgrades
-        ).delete()
+        """
+        Store ranking signals to Parquet via SignalStore.
         
-        signals = []
+        Replaces SQLite ModelSignals table.
+        """
+        from quant.data.signal_store import get_signal_store
+        
+        signals_data = []
         for _, row in df.iterrows():
             meta = {
                 'vsm': row.get('volatility_scaled_momentum', 0),
@@ -354,29 +355,29 @@ class RankingEngine:
                 'z_vsm': row.get('z_volatility_scaled_momentum_neutral', 0),
                 'z_bab': row.get('z_betting_against_beta_neutral', 0),
                 'z_upside': row.get('z_upside_neutral', 0),
-                'z_pead': row.get('z_pead_neutral', row.get('pead', 0)),  # P3: PEAD z-score
-                'z_sentiment': row.get('z_sentiment_neutral', row.get('sentiment', 0)),  # P4: Sentiment z-score
-                # Tier-1: Regime info
+                'z_pead': row.get('z_pead_neutral', row.get('pead', 0)),
+                'z_sentiment': row.get('z_sentiment_neutral', row.get('sentiment', 0)),
                 'regime': self.current_regime,
                 'weights_used': DynamicFactorWeights.get_weights(self.current_regime),
                 'sector': row.get('sector', 'Unknown'),
-                'beta': row.get('raw_beta', 1.0), # Store raw beta
+                'beta': row.get('raw_beta', 1.0),
                 'revisions': row.get('revisions', 0),
                 'val_composite': row.get('valuation_composite', 0),
                 'z_revisions': row.get('z_revisions_neutral', 0),
                 'z_val_composite': row.get('z_valuation_composite_neutral', 0)
             }
             
-            signals.append(ModelSignals(
-                sid=int(row['sid']),
-                date=ranking_date,
-                model_name='ranking_v3',  # Version 3 with Tier-1 upgrades
-                score=row['score'],
-                rank=int(row['rank']),
-                metadata_json=json.dumps(meta)
-            ))
-            
-        self.db.bulk_save_objects(signals)
-        self.db.commit()
-        logger.info(f"Stored {len(signals)} ranking_v3 signals (Regime: {self.current_regime}).")
+            signals_data.append({
+                'ticker': row['ticker'],
+                'score': float(row['score']),
+                'rank': int(row['rank']),
+                'metadata': meta
+            })
+        
+        # Write to Parquet
+        store = get_signal_store()
+        signals_df = pd.DataFrame(signals_data)
+        result = store.write_signals(ranking_date, 'ranking_v3', signals_df)
+        
+        logger.info(f"Stored {result['rows_written']} ranking_v3 signals to Parquet (Regime: {self.current_regime}).")
 

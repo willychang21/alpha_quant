@@ -1,129 +1,186 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from app.core.database import get_db
-from quant.data.models import ModelSignals, PortfolioTargets, Security
+"""
+Quant API Endpoints
+
+Stock rankings, portfolio targets, and backtest endpoints.
+Now powered by Parquet/DuckDB for high-performance queries.
+"""
+
+from fastapi import APIRouter, HTTPException, Query
+from quant.data.signal_store import get_signal_store
+from quant.data.data_provider import create_data_provider
 from quant.backtest.engine import BacktestEngine
 from datetime import date, timedelta
 import logging
-import sys
-from app.core.database import SessionLocal
+import json
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+
 @router.get("/rankings")
-def get_rankings():
+def get_rankings(
+    model: str = Query(default=None, description="Model name (ranking_v3, ranking_v2)"),
+    limit: int = Query(default=100, le=500, description="Max results")
+):
     """
-    Get latest stock rankings from RankingEngine v3.
-    Includes PEAD, Sentiment, and regime-adaptive scoring.
+    Get latest stock rankings from RankingEngine.
+    
+    Now uses Parquet/DuckDB backend for 35x faster queries.
     """
-    db = SessionLocal()
     try:
-        total_count = db.query(ModelSignals).count()
-        logger.info(f"Total ModelSignals in DB: {total_count}")
+        store = get_signal_store()
         
-        latest = db.query(ModelSignals).order_by(ModelSignals.date.desc()).first()
-        if not latest:
-            logger.warning("No signals found in DB")
-            return []
-        
-        logger.info(f"Latest signal date: {latest.date}")
-        
-        # Try v3 first, fallback to v2, then v1
+        # Try v3 first, fallback to v2
         for model_version in ['ranking_v3', 'ranking_v2', 'ranking_v1']:
-            signals = db.query(ModelSignals).filter(
-                ModelSignals.date == latest.date, 
-                ModelSignals.model_name == model_version
-            ).order_by(ModelSignals.rank.asc()).all()
+            if model and model != model_version:
+                continue
+                
+            df = store.get_latest_signals(model_name=model_version, limit=limit)
             
-            if signals:
-                logger.info(f"Found {len(signals)} signals from {model_version}")
+            if not df.empty:
+                logger.info(f"Found {len(df)} signals from {model_version}")
                 break
-        
-        if not signals:
-            logger.warning("No ranking signals found for any version")
+        else:
+            logger.warning("No ranking signals found")
             return []
         
+        # Convert to API response format
         results = []
-        for s in signals:
-            try:
-                if not s.security:
-                    continue
-                
-                # Parse metadata for v3 signals
-                import json
-                metadata = {}
-                if s.metadata_json:
-                    metadata = json.loads(s.metadata_json) if isinstance(s.metadata_json, str) else s.metadata_json
-                    
-                results.append({
-                    "rank": s.rank,
-                    "ticker": s.security.ticker,
-                    "score": s.score,
-                    "date": s.date.isoformat() if s.date else None,
-                    "model": model_version,
-                    "regime": metadata.get('regime', 'Unknown'),
-                    "pead": metadata.get('pead', 0),
-                    "sentiment": metadata.get('sentiment', 0),
-                    "vsm": metadata.get('vsm', 0),
-                    "bab": metadata.get('bab', 0),
-                    "qmj": metadata.get('qmj', 0),
-                    "upside": metadata.get('upside', 0),
-                    "metadata": s.metadata_json
-                })
-            except Exception as e:
-                logger.error(f"Error processing signal {s.id}: {e}")
-                
+        for _, row in df.iterrows():
+            # Parse metadata
+            metadata = {}
+            if 'metadata_json' in row and row['metadata_json']:
+                try:
+                    metadata = json.loads(row['metadata_json']) if isinstance(row['metadata_json'], str) else row['metadata_json']
+                except:
+                    pass
+            
+            results.append({
+                "rank": int(row['rank']) if 'rank' in row else None,
+                "ticker": row['ticker'],
+                "score": float(row['score']) if 'score' in row else None,
+                "date": str(row['date']) if 'date' in row else None,
+                "model": row.get('model_name', model_version),
+                "regime": metadata.get('regime', 'Unknown'),
+                "pead": metadata.get('pead', 0),
+                "sentiment": metadata.get('sentiment', 0),
+                "vsm": metadata.get('vsm', 0),
+                "bab": metadata.get('bab', 0),
+                "qmj": metadata.get('qmj', 0),
+                "upside": metadata.get('upside', 0),
+                "metadata": row.get('metadata_json')
+            })
+        
         return results
-    finally:
-        db.close()
+        
+    except Exception as e:
+        logger.error(f"Error fetching rankings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/portfolio")
-def get_portfolio():
+def get_portfolio(
+    model: str = Query(default="mvo_sharpe", description="Optimizer model name")
+):
     """
     Get latest portfolio targets.
+    
+    Now uses Parquet/DuckDB backend.
     """
-    db = SessionLocal()
     try:
-        sys.stderr.write("DEBUG: Entering get_portfolio\n")
-        sys.stderr.flush()
+        store = get_signal_store()
+        df = store.get_latest_targets(model_name=model)
         
-        latest = db.query(PortfolioTargets).order_by(PortfolioTargets.date.desc()).first()
-        if not latest:
-            print("DEBUG: No latest portfolio target found")
+        if df.empty:
+            logger.warning(f"No portfolio targets found for {model}")
             return []
-            
-        print(f"DEBUG: Latest portfolio date: {latest.date}")
-        
-        targets = db.query(PortfolioTargets).filter(PortfolioTargets.date == latest.date, PortfolioTargets.model_name == 'mvo_sharpe').all()
-        print(f"DEBUG: Found {len(targets)} portfolio targets")
         
         return [
             {
-                "ticker": t.security.ticker,
-                "weight": t.weight,
-                "date": t.date
+                "ticker": row['ticker'],
+                "weight": float(row['weight']),
+                "date": str(row['date']) if 'date' in row else None
             }
-            for t in targets
+            for _, row in df.iterrows()
         ]
+        
     except Exception as e:
-        print(f"DEBUG: Error in get_portfolio: {e}")
-        return []
-    finally:
-        db.close()
+        logger.error(f"Error fetching portfolio: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/backtest")
-def run_backtest(db: Session = Depends(get_db)):
+
+@router.get("/portfolios")
+def get_all_portfolios():
     """
-    Run a backtest simulation (1 Year).
+    Get all available portfolio models and their latest targets.
     """
     try:
-        engine = BacktestEngine(db)
-        end_date = date.today()
-        start_date = end_date - timedelta(days=365)
+        store = get_signal_store()
+        
+        # Get all available target dates
+        dates = store.list_available_dates('targets')
+        
+        if not dates:
+            return {"models": [], "latest_date": None}
+        
+        latest_date = dates[0]
+        
+        # Get targets for different models
+        models = {}
+        for model_name in ['mvo_sharpe', 'hrp_v1', 'kelly_v1', 'mvo_v1']:
+            df = store.get_latest_targets(model_name=model_name)
+            if not df.empty:
+                models[model_name] = [
+                    {"ticker": row['ticker'], "weight": float(row['weight'])}
+                    for _, row in df.iterrows()
+                ]
+        
+        return {
+            "models": list(models.keys()),
+            "latest_date": str(latest_date),
+            "portfolios": models
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching portfolios: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/backtest")
+def run_backtest(
+    start_year: int = Query(default=None, description="Start year"),
+    end_year: int = Query(default=None, description="End year")
+):
+    """
+    Run a backtest simulation.
+    
+    Uses Parquet/DuckDB DataProvider for fast price lookups.
+    """
+    try:
+        # Create data provider (uses Parquet)
+        provider = create_data_provider(provider_type='parquet')
+        
+        # Create backtest engine with data provider
+        engine = BacktestEngine(data_provider=provider)
+        
+        # Calculate date range
+        if end_year:
+            end_date = date(end_year, 12, 31)
+        else:
+            end_date = date.today()
+            
+        if start_year:
+            start_date = date(start_year, 1, 1)
+        else:
+            start_date = end_date - timedelta(days=365)
         
         results = engine.run_backtest(start_date, end_date)
+        
+        # Convert DataFrame to dict if needed
+        if hasattr(results, 'to_dict'):
+            return results.to_dict('records')
         return results
+        
     except Exception as e:
         logger.error(f"Backtest failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

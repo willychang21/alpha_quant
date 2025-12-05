@@ -464,25 +464,44 @@ class PortfolioOptimizer:
             logger.warning(f"Failed to fetch system confidence: {e}")
             return 1.0
 
-    def _store_targets(self, sids, weights, date, optimizer: str = 'mvo'):
+    def _store_targets(self, sids, weights, target_date, optimizer: str = 'mvo'):
+        """
+        Store portfolio targets to Parquet via SignalStore.
+        
+        Replaces SQLite PortfolioTargets table.
+        """
+        from quant.data.signal_store import get_signal_store
+        
         model_name = f'{optimizer}_v1'  # mvo_v1 or hrp_v1
         
-        self.db.query(PortfolioTargets).filter(
-            PortfolioTargets.date == date,
-            PortfolioTargets.model_name == model_name
-        ).delete()
+        # Get SID to ticker mapping
+        sid_to_ticker = {}
+        for sid in sids:
+            try:
+                security = self.db.query(Security).filter(Security.sid == sid).first()
+                if security:
+                    sid_to_ticker[sid] = security.ticker
+            except:
+                pass
         
-        targets = []
+        # Prepare targets DataFrame
+        targets_data = []
         for sid, weight in zip(sids, weights):
             if weight > 0.001:  # Filter tiny weights
-                targets.append(PortfolioTargets(
-                    sid=sid,
-                    date=date,
-                    model_name=model_name,
-                    weight=float(weight)
-                ))
-                
-        self.db.bulk_save_objects(targets)
-        self.db.commit()
-        logger.info(f"Stored {len(targets)} portfolio targets with {model_name}.")
+                ticker = sid_to_ticker.get(sid, str(sid))
+                targets_data.append({
+                    'ticker': ticker,
+                    'weight': float(weight)
+                })
+        
+        if not targets_data:
+            logger.warning("No significant weights to store")
+            return
+        
+        # Write to Parquet
+        store = get_signal_store()
+        targets_df = pd.DataFrame(targets_data)
+        result = store.write_targets(target_date, model_name, targets_df)
+        
+        logger.info(f"Stored {result['rows_written']} portfolio targets ({model_name}) to Parquet.")
 

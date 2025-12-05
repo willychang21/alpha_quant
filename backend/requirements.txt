@@ -5,6 +5,8 @@ pydantic
 sqlalchemy
 pandas
 numpy
+duckdb>=0.9.0
+pyarrow>=14.0.0
 httpx
 scipy
 redis

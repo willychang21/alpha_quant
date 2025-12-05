@@ -32,42 +32,18 @@ def search_assets(query: str):
         return []
 
 def fetch_holdings(ticker: str):
-    # Mock VOO/QQQ for stability
-    if ticker == "VOO":
-         return [
-             {"ticker": "MSFT", "name": "Microsoft Corp", "percent": 7.0},
-             {"ticker": "AAPL", "name": "Apple Inc", "percent": 6.0},
-             {"ticker": "NVDA", "name": "Nvidia Corp", "percent": 5.0},
-             {"ticker": "AMZN", "name": "Amazon.com Inc", "percent": 3.5},
-             {"ticker": "META", "name": "Meta Platforms Inc", "percent": 2.5}
-         ]
-    if ticker == "QQQ":
-         return [
-             {"ticker": "AAPL", "name": "Apple Inc", "percent": 8.5},
-             {"ticker": "MSFT", "name": "Microsoft Corp", "percent": 8.0},
-             {"ticker": "AMZN", "name": "Amazon.com Inc", "percent": 5.0},
-             {"ticker": "NVDA", "name": "Nvidia Corp", "percent": 4.5},
-             {"ticker": "META", "name": "Meta Platforms Inc", "percent": 3.0},
-             {"ticker": "TSLA", "name": "Tesla Inc", "percent": 2.5}
-         ]
-
-    # Check cache
-    cache_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), 'data', 'holdings_cache.json')
+    """
+    Fetch ETF/Fund holdings directly from yfinance.
     
-    cache = {}
-    if os.path.exists(cache_file):
-        try:
-            with open(cache_file, 'r') as f:
-                cache = json.load(f)
-        except:
-            pass
-            
-    if ticker in cache:
-        return cache[ticker]
-
+    NOTE: This is real-time data only. Do NOT use for backtesting
+    as it would cause Look-Ahead Bias. For backtesting, use ETF
+    prices directly instead of decomposing into holdings.
+    """
     holdings = []
+    
     try:
         t = yf.Ticker(ticker)
+        
         # Try to get holdings from funds_data
         if hasattr(t, 'funds_data') and t.funds_data and hasattr(t.funds_data, 'top_holdings'):
             top_holdings = t.funds_data.top_holdings
@@ -85,16 +61,11 @@ def fetch_holdings(ticker: str):
                         "percent": percent * 100
                     })
                     
-        # Save to cache if we got data
-        if holdings:
-            cache[ticker] = holdings
-            with open(cache_file, 'w') as f:
-                json.dump(cache, f)
-                
     except Exception as e:
-        logger.warning(f"Could not fetch funds_data for {ticker}: {e}")
+        logger.warning(f"Could not fetch holdings for {ticker}: {e}")
         
     return holdings
+
 
 def get_asset_details(ticker: str):
     try:
