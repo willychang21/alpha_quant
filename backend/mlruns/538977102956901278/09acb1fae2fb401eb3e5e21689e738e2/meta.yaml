@@ -1,0 +1,14 @@
+artifact_uri: file:///Users/zhangjunjie/Documents/DCA/backend/mlruns/538977102956901278/09acb1fae2fb401eb3e5e21689e738e2/artifacts
+end_time: 1764910524904
+entry_point_name: ''
+experiment_id: '538977102956901278'
+lifecycle_stage: active
+run_id: 09acb1fae2fb401eb3e5e21689e738e2
+run_name: genetic_optimization
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1764910523317
+status: 3
+tags: []
+user_id: zhangjunjie

@@ -1,180 +1,173 @@
-# DCA Quant Backend (Tier-1 Hedge Fund Grade)
+# DCA Quant Backend (Tier-3 Enterprise Grade)
 
-The **DCA Quant Backend** is a sophisticated, event-driven quantitative trading engine designed to replicate hedge-fund grade workflows. It handles the entire lifecycle of algorithmic trading: from data ingestion and intrinsic valuation to multi-factor ranking, regime detection, portfolio optimization, and robust backtesting.
+The **DCA Quant Backend** is an institutional-grade quantitative trading engine. It has evolved from a static regime-based system (Tier-1) to an adaptive, risk-constrained platform (Tier-3) capable of geometric growth maximization and real-time execution.
 
 ---
 
-## 1. System Architecture
+## 1. System Architecture (Tier-3)
 
-The system operates on a modular, layered architecture designed for scalability and separation of concerns.
+The system operates on a modular, layered architecture designed for scalability, adaptability, and robustness.
 
 ```mermaid
 graph TD
     subgraph Data Layer
-        YF[YFinance Provider] -->|Raw Data| DL[Data Lake / SQL]
+        YF[YFinance] -->|OHLCV| DL[Data Lake]
+        WS[WebSocket] -->|Real-Time Ticks| DL
         DL -->|Price & Fundamentals| FE[Feature Engineering]
-        DL -->|News & Transcripts| NLP[Sentiment Engine]
     end
 
-    subgraph Regime Layer
-        DL -->|Benchmark Returns| HMM[HMM Regime Detector]
-        HMM -->|Bull/Bear State| RE
+    subgraph Alpha Engine (Tier-1)
+        FE -->|VSM, BAB, QMJ| RE[Ranking Engine]
+        HMM[HMM Regime Detector] -->|Bull/Bear| RE
+        RE -->|Primary Signal| ML[ML Layer]
     end
 
-    subgraph Alpha Engine
-        FE -->|VSM, BAB, QMJ, PEAD| RE[Ranking Engine v3]
-        NLP -->|Sentiment Score| RE
-        RE -->|Regime-Weighted Score| SG[Signal Generation]
+    subgraph Machine Learning (Tier-2)
+        ML -->|Triple Barrier| TB[Labeling]
+        TB -->|Meta-Labeling| XGB[XGBoost Classifier]
+        XGB -->|Confidence Score| PO
     end
 
-    subgraph Valuation Engine
-        DL -->|Financials| VO[Valuation Orchestrator]
-        VO -->|Fair Value| RE
+    subgraph Portfolio Construction (Tier-2)
+        PO[Portfolio Optimizer] -->|Kelly Criterion| KO[Sizing]
+        KO -->|Vol Targeting| RC[Risk Control]
+        RC -->|Target Weights| EX
     end
 
-    subgraph Portfolio Construction
-        SG -->|Top Picks| PO[Portfolio Optimizer]
-        PO -->|HRP / Black-Litterman| DB[Database]
+    subgraph Execution & Risk (Tier-2/3)
+        EX[Execution Algo] -->|VWAP Schedule| Broker
+        EX -->|Tail Hedging| Options[Put/VIX Calls]
+        EX -->|Component VaR| RiskMon[Risk Monitor]
     end
 
-    subgraph Execution & Verification
-        DB -->|Targets| BE[Backtest Engine]
-        BE -->|Purged CV / DSR| VF[Validation Framework]
+    subgraph MLOps (Tier-3)
+        MLflow[Model Registry] -->|Track Experiments| XGB
+        Ray[Distributed Cluster] -->|Parallel Backtest| PO
     end
 ```
 
 ### Core Components
 
-*   **Data Layer (`quant.data`)**: Manages the schema (SQLAlchemy) and data ingestion. Abstracts data sources (YFinance) and handles caching.
-*   **Regime Layer (`quant.regime`)**: Uses Hidden Markov Models (HMM) to detect market regimes (Bull/Bear) and adjust factor weights dynamically.
-*   **Alpha Engine (`quant.features`, `quant.selection`)**: Generates predictive signals based on:
-    *   **Risk Factors**: Volatility-Scaled Momentum (VSM), Betting-Against-Beta (BAB), Idiosyncratic Volatility (IVOL).
-    *   **Quality Factors**: Quality-Minus-Junk (QMJ), Accruals Anomaly.
-    *   **Behavioral Factors**: Post-Earnings Announcement Drift (PEAD), NLP Sentiment (FinBERT).
-*   **Valuation Engine (`quant.valuation`)**: Determines "intrinsic value" using DCF, DDM, and REIT models.
-*   **Portfolio Optimizer (`quant.portfolio`)**: Constructs efficient portfolios using Hierarchical Risk Parity (HRP) or Black-Litterman models.
-*   **Validation Framework (`quant.backtest.validation`)**: Ensures strategy robustness using Purged Walk-Forward Cross-Validation and Deflated Sharpe Ratio (DSR).
+*   **Data Layer (`quant.data`)**:
+    *   **Ingestion**: YFinance (Batch) and WebSocket (Real-Time).
+    *   **Storage**: DuckDB/Parquet Data Lake.
+*   **Alpha Engine (`quant.features`)**:
+    *   **Factors**: VSM, BAB, QMJ, PEAD, Sentiment.
+    *   **Regime**: HMM-based market state detection.
+*   **ML Layer (`quant.mlops`, `quant.research`)**:
+    *   **Labeling**: Triple Barrier Method (Profit/Stop/Time).
+    *   **Meta-Labeling**: XGBoost model to filter false positives.
+    *   **Optimization**: Genetic Algorithms (DEAP) for hyperparameter tuning.
+*   **Portfolio Engine (`quant.portfolio`)**:
+    *   **Sizing**: Multivariate Kelly Optimization (Growth Maximization).
+    *   **Risk**: Volatility Targeting (Dynamic Leverage).
+*   **Execution & Risk (`quant.execution`, `quant.risk`)**:
+    *   **Algo**: VWAP Execution with Market Impact estimation.
+    *   **Hedging**: Systematic Tail Hedging (Puts) and Component VaR decomposition.
+*   **Infrastructure (`quant.backtest`)**:
+    *   **Distributed**: Ray-based parallel backtesting.
+    *   **MLOps**: MLflow for experiment tracking and model versioning.
 
 ---
 
 ## 2. Directory Structure
 
-The codebase is organized to reflect the quantitative workflow.
-
 ```
 backend/
 ├── app/                        # FastAPI Application Layer
-│   ├── api/                    # REST API Endpoints
-│   ├── core/                   # Configuration, Database, Logging
-│   └── services/               # Application Services
-├── quant/                      # Quantitative Core (The "Brain")
-│   ├── backtest/               # Simulation & Validation
-│   │   ├── engine.py           # Event-Driven Backtester
+│   ├── api/v1/                 # REST API Endpoints
+│   │   ├── endpoints/          # quant, signals, dashboard
+│   │   └── router.py           # Main Router
+├── quant/                      # Quantitative Core
+│   ├── backtest/               # Simulation Engine
+│   │   ├── distributed.py      # Ray Parallel Backtester
 │   │   ├── validation.py       # Purged Walk-Forward CV
 │   │   └── statistics.py       # Deflated Sharpe Ratio
-│   ├── data/                   # Data Access Layer
-│   ├── features/               # Alpha Factor Library
-│   │   ├── pead.py             # Post-Earnings Announcement Drift
-│   │   ├── sentiment.py        # NLP Sentiment Analysis
-│   │   ├── volatility.py       # VSM, IVOL
-│   │   ├── beta.py             # BAB
-│   │   └── quality.py          # QMJ, Accruals
+│   ├── data/                   # Data Access
+│   │   └── realtime/           # WebSocket & Stream Clients
+│   ├── execution/              # Execution Algorithms
+│   │   └── algo.py             # VWAP Execution
+│   ├── features/               # Alpha Factors
+│   │   ├── labeling.py         # Triple Barrier Labeling
+│   │   └── meta_labeling.py    # XGBoost Meta-Labeler
+│   ├── mlops/                  # MLOps Infrastructure
+│   │   └── registry.py         # MLflow Model Registry
 │   ├── portfolio/              # Portfolio Construction
-│   │   ├── optimizer.py        # Optimization Orchestrator
-│   │   └── advanced_optimizers.py # HRP, Black-Litterman
-│   ├── regime/                 # Market Regime Detection
-│   │   └── hmm.py              # Hidden Markov Model
-│   ├── selection/              # Signal Generation
-│   │   └── ranking.py          # RankingEngine v3 (Dynamic Weights)
+│   │   ├── kelly.py            # Kelly Optimization
+│   │   └── risk_control.py     # Volatility Targeting
+│   ├── research/               # Research Tools
+│   │   └── evolution.py        # Genetic Algorithms
+│   ├── risk/                   # Risk Management
+│   │   ├── hedging.py          # Tail Hedging
+│   │   └── var.py              # Component VaR
 │   └── valuation/              # Intrinsic Valuation
-│       ├── orchestrator.py     # Model Selection Logic
-│       └── models/             # DCF, DDM, REIT Models
 ├── scripts/                    # Operational Workflows
-│   ├── run_daily_job.py        # End-to-End Pipeline Entrypoint
-│   └── verify_ranking_v3.py    # Verification Script
 └── tests/                      # Test Suite (Pytest)
 ```
 
 ---
 
-## 3. Detailed Workflows
+## 3. Operational Guide
 
-### 3.1 Daily Signal Generation Pipeline (RankingEngine v3)
-The `run_daily_job.py` script executes the following steps:
+### Running the System
+1.  **Start the Backend Server**:
+    ```bash
+    fastapi dev main.py
+    ```
+2.  **Access the Dashboard**:
+    Navigate to `http://localhost:5173/advanced` (Frontend).
 
-1.  **Universe Selection**: Loads active securities (S&P 500 + Nasdaq 100).
-2.  **Regime Detection**:
-    *   Fits Gaussian HMM to SPY returns.
-    *   Predicts current state: **Bull** (Low Vol) or **Bear** (High Vol).
-3.  **Factor Computation**:
-    *   **VSM/BAB/QMJ**: Core risk and quality factors.
-    *   **PEAD**: Earnings surprise and momentum.
-    *   **Sentiment**: News/Earnings call sentiment via NLP.
-    *   **Upside**: Valuation gap from DCF/DDM models.
-4.  **Dynamic Scoring**:
-    *   Weights are adjusted based on Regime:
-        *   **Bull**: Overweight Momentum (VSM) and Growth.
-        *   **Bear**: Overweight Quality (QMJ) and Low Beta (BAB).
-5.  **Portfolio Optimization**:
-    *   **HRP**: Clusters assets by correlation to minimize portfolio variance without matrix inversion issues.
-    *   **Black-Litterman**: Blends market equilibrium with our Alpha views.
+### Key Workflows
 
-### 3.2 Valuation Logic
-The `ValuationOrchestrator` dynamically selects the appropriate model:
+#### 1. Train Meta-Labeling Model
+```python
+from quant.features.meta_labeling import MetaLabeler
+# ... load data ...
+model = MetaLabeler()
+model.train(X_train, y_train)
+```
 
-| Sector | Model | Logic |
-| :--- | :--- | :--- |
-| **Financial Services** | **DDM** | Dividend Discount Model. |
-| **Real Estate** | **REIT Model** | FFO (Funds From Operations) and NAV. |
-| **Technology / General** | **DCF** | Discounted Cash Flow (5-10yr FCFF + Terminal). |
+#### 2. Run Genetic Optimization (Distributed)
+```bash
+python -m scripts.run_genetic_opt --use-ray
+```
+
+#### 3. Execute Trades (VWAP)
+```python
+from quant.execution.algo import VWAPExecution
+algo = VWAPExecution()
+schedule = algo.generate_schedule(total_shares=1000)
+```
+
+### API Reference (Tier-3)
+*   `GET /api/v1/quant/ml/signals`: Latest XGBoost signal confidence.
+*   `GET /api/v1/quant/risk/metrics`: Real-time VaR and Hedge Cost.
+*   `GET /api/v1/quant/execution/vwap`: VWAP execution schedule.
 
 ---
 
-## 4. Operational Guide
-
-### Adding a New Ticker
-```bash
-sqlite3 data/database.sqlite "INSERT INTO securities (ticker, name, active) VALUES ('NVDA', 'NVIDIA Corp', 1);"
-```
-
-### Running the Daily Job
-```bash
-python -m scripts.run_daily_job
-```
-
-### Verifying Signals
-```bash
-python -m scripts.verify_ranking_v3
-```
-
-### Running Validation Tests
-To verify strategy robustness (DSR, PurgedCV):
-```bash
-pytest tests/test_validation_framework.py
-```
-
----
-
-## 5. Development Setup
+## 4. Development Setup
 
 ### Prerequisites
 *   **Python 3.10+**
-*   **SQLite**
+*   **Redis** (for Ray/Celery)
+*   **MLflow** (for Experiment Tracking)
 
 ### Installation
 ```bash
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+# Install Tier-3 deps: ray, mlflow, xgboost, cvxpy
 ```
 
-### Running the Server
+### Running Tests
 ```bash
-fastapi dev main.py
+# Run all tests
+pytest tests/
+
+# Run specific Tier-3 tests
+pytest tests/test_tier3_mlops.py
+pytest tests/test_tier3_distributed.py
+pytest tests/test_tier3_realtime.py
 ```
-
-### API Reference
-*   `GET /api/v1/quant/rankings`: Get latest v3 ranking signals.
-*   `GET /api/v1/quant/signals`: Get historical signals with metadata.
-
-See `http://localhost:8000/docs` for Swagger UI.

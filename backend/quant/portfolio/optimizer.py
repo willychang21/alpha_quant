@@ -8,6 +8,9 @@ import cvxpy as cp
 from sklearn.covariance import LedoitWolf
 # Tier-1: Advanced Optimizers
 from quant.portfolio.advanced_optimizers import HRPOptimizer, BlackLittermanModel
+# Tier-2: Money Management
+from quant.portfolio.kelly import optimize_multivariate_kelly
+from quant.portfolio.risk_control import apply_vol_targeting
 import yfinance as yf
 import logging
 
@@ -23,7 +26,8 @@ class PortfolioOptimizer:
         top_n: int = 50,  # Optimize top 50
         max_weight: float = 0.10,  # Max 10% per stock
         risk_aversion: float = 1.0,
-        optimizer: Literal['hrp', 'bl', 'mvo'] = 'hrp'  # Tier-1: Choose optimizer
+        optimizer: Literal['hrp', 'bl', 'mvo', 'kelly'] = 'hrp',  # Tier-1/2: Choose optimizer
+        target_vol: float = None  # Tier-2: Volatility Targeting (e.g. 0.15)
     ):
         """
         Run portfolio optimization on top ranked stocks.
@@ -230,6 +234,42 @@ class PortfolioOptimizer:
                 logger.error(f"Black-Litterman optimization error: {e}")
                 optimizer = 'mvo'
         
+            except Exception as e:
+                logger.error(f"Black-Litterman optimization error: {e}")
+                optimizer = 'mvo'
+        
+        if optimizer == 'kelly':
+            # Multivariate Kelly Optimization (Tier-2)
+            logger.info("🚀 Using Multivariate Kelly Optimizer (Tier-2)")
+            
+            try:
+                # Calculate inputs
+                # Expected Returns: We use the Alpha Scores scaled to annual returns
+                # Score +3.0 -> ~30% excess return? 
+                # Let's assume 1 Z-score = 5% annualized alpha for Kelly sizing
+                aligned_alphas = np.array([sid_to_score[sid] for sid in valid_sids])
+                expected_returns = aligned_alphas * 0.05 
+                
+                # Covariance
+                cov_matrix = returns_df_named.cov().values * 252
+                
+                kelly_weights = optimize_multivariate_kelly(
+                    expected_returns, 
+                    cov_matrix, 
+                    max_leverage=1.0, # Long only, fully invested max
+                    fractional_kelly=0.5 # Half-Kelly
+                )
+                
+                # Map back
+                optimal_weights = kelly_weights
+                
+                # Store for later mapping
+                # (Logic continues below in common block)
+                
+            except Exception as e:
+                logger.error(f"Kelly optimization error: {e}")
+                optimizer = 'mvo'
+                
         # --- Original MVO Path ---
         if optimizer == 'mvo':
             logger.info("🔸 Using MVO Optimizer (fallback)")
@@ -272,8 +312,30 @@ class PortfolioOptimizer:
         
         # Clean weights
         optimal_weights[optimal_weights < 0.001] = 0
+        optimal_weights[optimal_weights < 0.001] = 0
         optimal_weights /= np.sum(optimal_weights)
         
+        # --- Tier-2: Volatility Targeting ---
+        if target_vol:
+            logger.info(f"🎯 Applying Volatility Targeting (Target: {target_vol:.1%})")
+            # Convert weights to Series for function
+            weights_series = pd.Series(optimal_weights, index=valid_sids)
+            
+            # We need prices with SIDs as columns
+            prices_df = pivot_df[valid_sids]
+            
+            scaled_weights_series = apply_vol_targeting(
+                weights_series, 
+                prices_df, 
+                target_vol=target_vol
+            )
+            
+            # Update optimal_weights (might sum to < 1.0 or > 1.0 now)
+            # We need to map back to the array order
+            optimal_weights = np.array([scaled_weights_series.get(sid, 0.0) for sid in valid_sids])
+            
+            logger.info(f"   Leverage after Vol Targeting: {np.sum(optimal_weights):.2f}x")
+
         # 5. Store Results
         self._store_targets(valid_sids, optimal_weights, optimization_date)
         

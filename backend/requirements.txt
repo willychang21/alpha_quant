@@ -11,3 +11,9 @@ redis
 cvxpy
 scikit-learn
 pytest
+xgboost
+shap
+deap
+mlflow
+ray[default]
+websockets
