@@ -14,43 +14,65 @@ logger = logging.getLogger(__name__)
 @router.get("/rankings")
 def get_rankings():
     """
-    Get latest stock rankings.
+    Get latest stock rankings from RankingEngine v3.
+    Includes PEAD, Sentiment, and regime-adaptive scoring.
     """
     db = SessionLocal()
     try:
-        # Find latest date
-        sys.stderr.write("DEBUG: Entering get_rankings\n")
-        sys.stderr.flush()
-    
         total_count = db.query(ModelSignals).count()
-        print(f"DEBUG: Total ModelSignals in DB: {total_count}")
+        logger.info(f"Total ModelSignals in DB: {total_count}")
         
         latest = db.query(ModelSignals).order_by(ModelSignals.date.desc()).first()
         if not latest:
-            print("DEBUG: No latest signal found in DB")
+            logger.warning("No signals found in DB")
             return []
         
-        print(f"DEBUG: Latest signal date: {latest.date}")
+        logger.info(f"Latest signal date: {latest.date}")
+        
+        # Try v3 first, fallback to v2, then v1
+        for model_version in ['ranking_v3', 'ranking_v2', 'ranking_v1']:
+            signals = db.query(ModelSignals).filter(
+                ModelSignals.date == latest.date, 
+                ModelSignals.model_name == model_version
+            ).order_by(ModelSignals.rank.asc()).all()
             
-        signals = db.query(ModelSignals).filter(ModelSignals.date == latest.date, ModelSignals.model_name == 'ranking_v1').order_by(ModelSignals.rank.asc()).all()
-        print(f"DEBUG: Found {len(signals)} ranking signals")
+            if signals:
+                logger.info(f"Found {len(signals)} signals from {model_version}")
+                break
+        
+        if not signals:
+            logger.warning("No ranking signals found for any version")
+            return []
         
         results = []
         for s in signals:
             try:
                 if not s.security:
-                    print(f"DEBUG: Signal {s.id} has no security attached")
                     continue
+                
+                # Parse metadata for v3 signals
+                import json
+                metadata = {}
+                if s.metadata_json:
+                    metadata = json.loads(s.metadata_json) if isinstance(s.metadata_json, str) else s.metadata_json
                     
                 results.append({
                     "rank": s.rank,
                     "ticker": s.security.ticker,
                     "score": s.score,
-                    "date": s.date,
+                    "date": s.date.isoformat() if s.date else None,
+                    "model": model_version,
+                    "regime": metadata.get('regime', 'Unknown'),
+                    "pead": metadata.get('pead', 0),
+                    "sentiment": metadata.get('sentiment', 0),
+                    "vsm": metadata.get('vsm', 0),
+                    "bab": metadata.get('bab', 0),
+                    "qmj": metadata.get('qmj', 0),
+                    "upside": metadata.get('upside', 0),
                     "metadata": s.metadata_json
                 })
             except Exception as e:
-                print(f"DEBUG: Error processing signal {s.id}: {e}")
+                logger.error(f"Error processing signal {s.id}: {e}")
                 
         return results
     finally:

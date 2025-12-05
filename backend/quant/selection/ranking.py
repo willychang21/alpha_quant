@@ -11,6 +11,8 @@ from core.adapters.yfinance_provider import YFinanceProvider
 # Tier-1 Upgrades
 from quant.features.accruals import AccrualsAnomaly
 from quant.features.ivol import IdiosyncraticVolatility, AmihudIlliquidity
+from quant.features.pead import PostEarningsAnnouncementDrift, EarningsMomentum
+from quant.features.sentiment import NewsSentimentFactor
 from quant.regime.hmm import RegimeDetector, DynamicFactorWeights
 from datetime import date
 import pandas as pd
@@ -42,6 +44,13 @@ class RankingEngine:
         self.accruals_gen = AccrualsAnomaly()
         self.ivol_gen = IdiosyncraticVolatility(lookback=21)
         self.illiq_gen = AmihudIlliquidity(lookback=21)
+        
+        # P3: PEAD (Post-Earnings Announcement Drift)
+        self.pead_gen = PostEarningsAnnouncementDrift(lookback_days=60, decay_halflife=30)
+        self.earnings_mom_gen = EarningsMomentum()
+        
+        # P4: NLP Sentiment
+        self.sentiment_gen = NewsSentimentFactor(lookback_days=7, max_articles=5)
         
         # Regime Detection
         self.regime_detector = RegimeDetector(n_states=2, lookback=252)
@@ -195,15 +204,35 @@ class RankingEngine:
                         mom_score = self.momentum_gen.compute(history)
                         if isinstance(mom_score, pd.Series): mom_score = float(mom_score.iloc[-1]) if not mom_score.empty else 0.0
                         
+                        # 5. PEAD (Post-Earnings Announcement Drift) - P3
+                        pead_score = 0.0
+                        try:
+                            pead_raw = self.pead_gen.compute(history, ticker_data.get('info', {}), ticker=sec.ticker)
+                            if isinstance(pead_raw, pd.Series) and not pead_raw.empty:
+                                pead_score = float(pead_raw.iloc[-1])
+                        except Exception as e:
+                            logger.debug(f"PEAD calculation failed for {sec.ticker}: {e}")
+                        
+                        # 6. News Sentiment (P4)
+                        sentiment_score = 0.0
+                        try:
+                            sentiment_raw = self.sentiment_gen.compute(history, ticker_data.get('info', {}), ticker=sec.ticker)
+                            if isinstance(sentiment_raw, pd.Series) and not sentiment_raw.empty:
+                                sentiment_score = float(sentiment_raw.iloc[-1])
+                        except Exception as e:
+                            logger.debug(f"Sentiment calculation failed for {sec.ticker}: {e}")
+                        
                         # Construct Result Dict
                         result = {
                             'sid': sec.sid,
                             'ticker': sec.ticker,
                             'sector': ticker_data.get('info', {}).get('sector', 'Unknown'),
-                            'momentum': mom_score, # Legacy
+                            'momentum': mom_score,  # Legacy
                             'volatility_scaled_momentum': vsm_score,
                             'betting_against_beta': bab_score,
                             'upside': upside,
+                            'pead': pead_score,  # P3: PEAD
+                            'sentiment': sentiment_score,  # P4: NLP Sentiment
                             # QMJ Components
                             'roe': qmj_components.get('roe', 0.0),
                             'gross_margin': qmj_components.get('gross_margin', 0.0),
@@ -251,7 +280,9 @@ class RankingEngine:
             weights['vsm'] * df.get('z_volatility_scaled_momentum_neutral', 0) +
             weights['bab'] * df.get('z_betting_against_beta_neutral', 0) +
             weights['qmj'] * df.get('quality', 0) +  # Quality is already a composite Z-score from pipeline
-            weights['upside'] * df.get('z_upside_neutral', 0)
+            weights['upside'] * df.get('z_upside_neutral', 0) +
+            weights.get('pead', 0) * df.get('z_pead_neutral', df.get('pead', 0)) +  # P3: PEAD
+            weights.get('sentiment', 0) * df.get('z_sentiment_neutral', df.get('sentiment', 0))  # P4: Sentiment
         ).fillna(0.0)
         
         # Rank
@@ -277,9 +308,13 @@ class RankingEngine:
                 'bab': row.get('betting_against_beta', 0),
                 'qmj': row.get('quality', 0),
                 'upside': row.get('upside', 0),
+                'pead': row.get('pead', 0),  # P3: PEAD
+                'sentiment': row.get('sentiment', 0),  # P4: Sentiment
                 'z_vsm': row.get('z_volatility_scaled_momentum_neutral', 0),
                 'z_bab': row.get('z_betting_against_beta_neutral', 0),
                 'z_upside': row.get('z_upside_neutral', 0),
+                'z_pead': row.get('z_pead_neutral', row.get('pead', 0)),  # P3: PEAD z-score
+                'z_sentiment': row.get('z_sentiment_neutral', row.get('sentiment', 0)),  # P4: Sentiment z-score
                 # Tier-1: Regime info
                 'regime': self.current_regime,
                 'weights_used': DynamicFactorWeights.get_weights(self.current_regime)

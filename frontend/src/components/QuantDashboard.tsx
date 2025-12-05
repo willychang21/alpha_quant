@@ -16,6 +16,14 @@ interface Ranking {
   ticker: string;
   score: number;
   date: string;
+  model: string;
+  regime: string;
+  pead: number;
+  sentiment: number;
+  vsm: number;
+  bab: number;
+  qmj: number;
+  upside: number;
   metadata: string;
 }
 
@@ -31,6 +39,23 @@ interface BacktestPoint {
 }
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d', '#ffc658', '#8dd1e1', '#a4de6c', '#d0ed57'];
+
+const getRegimeBadge = (regime: string) => {
+  switch (regime) {
+    case 'Bull':
+      return <span className="px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 text-xs">🐂 Bull</span>;
+    case 'Bear':
+      return <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 text-xs">🐻 Bear</span>;
+    default:
+      return <span className="px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 text-xs">📊 Unknown</span>;
+  }
+};
+
+const getSentimentIcon = (sentiment: number) => {
+  if (sentiment > 0.1) return "🟢";
+  if (sentiment < -0.1) return "🔴";
+  return "🟡";
+};
 
 export function QuantDashboard() {
   const [rankings, setRankings] = useState<Ranking[]>([]);
@@ -76,6 +101,10 @@ export function QuantDashboard() {
     }
   };
 
+  // Get regime from first ranking (they should all share the same regime)
+  const currentRegime = rankings.length > 0 ? rankings[0].regime : 'Unknown';
+  const modelVersion = rankings.length > 0 ? rankings[0].model : 'N/A';
+
   return (
     <div className="space-y-6 p-6">
       <motion.div 
@@ -83,7 +112,13 @@ export function QuantDashboard() {
         animate={{ opacity: 1, y: 0 }}
         className="flex justify-between items-center"
       >
-        <h1 className="text-3xl font-bold tracking-tight">Quant System</h1>
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Quant System</h1>
+          <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
+            <span>Model: <code className="bg-muted px-1.5 py-0.5 rounded">{modelVersion}</code></span>
+            <span>Regime: {getRegimeBadge(currentRegime)}</span>
+          </div>
+        </div>
         <Button onClick={runBacktest} disabled={loading}>
           {loading ? "Running Simulation..." : "Run Backtest"}
         </Button>
@@ -93,24 +128,36 @@ export function QuantDashboard() {
         {/* Top Picks */}
         <Card className="col-span-1">
           <CardHeader>
-            <CardTitle>Top Ranked Stocks</CardTitle>
+            <CardTitle>Top Ranked Stocks (v3 + PEAD + Sentiment)</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="max-h-[400px] overflow-y-auto">
+            <div className="max-h-[500px] overflow-y-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Rank</TableHead>
                     <TableHead>Ticker</TableHead>
                     <TableHead>Score</TableHead>
+                    <TableHead>PEAD</TableHead>
+                    <TableHead>Sent.</TableHead>
+                    <TableHead>Upside</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rankings.slice(0, 10).map((r) => (
+                  {rankings.slice(0, 15).map((r) => (
                     <TableRow key={r.ticker}>
                       <TableCell className="font-medium">#{r.rank}</TableCell>
-                      <TableCell>{r.ticker}</TableCell>
-                      <TableCell>{r.score.toFixed(2)}</TableCell>
+                      <TableCell className="font-semibold">{r.ticker}</TableCell>
+                      <TableCell>{r.score?.toFixed(2) ?? 'N/A'}</TableCell>
+                      <TableCell className={r.pead > 0.5 ? 'text-green-400' : r.pead < -0.5 ? 'text-red-400' : ''}>
+                        {r.pead?.toFixed(2) ?? '0.00'}
+                      </TableCell>
+                      <TableCell>
+                        {getSentimentIcon(r.sentiment ?? 0)} {r.sentiment?.toFixed(2) ?? '0.00'}
+                      </TableCell>
+                      <TableCell className={r.upside > 0 ? 'text-green-400' : 'text-red-400'}>
+                        {r.upside ? `${(r.upside * 100).toFixed(0)}%` : 'N/A'}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

@@ -188,35 +188,43 @@ class DynamicFactorWeights:
     # Default weights by regime
     REGIME_WEIGHTS = {
         "Bull": {
-            "vsm": 0.35,      # Momentum works in trends
-            "bab": 0.15,      # BAB less important
-            "qmj": 0.25,      # Quality always relevant
-            "upside": 0.25,   # Value works in recoveries
-            "accruals": 0.00, # Optional
+            "vsm": 0.25,      # Momentum works in trends
+            "bab": 0.08,      # BAB less important
+            "qmj": 0.17,      # Quality always relevant
+            "upside": 0.17,   # Value works in recoveries
+            "pead": 0.13,     # P3: Earnings drift strong in bull
+            "sentiment": 0.15,# P4: Sentiment matters in bull
+            "accruals": 0.05, # Optional
             "ivol": 0.00      # Optional
         },
         "Bear": {
-            "vsm": 0.10,      # Momentum crashes in reversals
-            "bab": 0.30,      # Low beta protects
-            "qmj": 0.40,      # Quality is defensive
-            "upside": 0.20,   # Value traps possible
-            "accruals": 0.00,
+            "vsm": 0.08,      # Momentum crashes in reversals
+            "bab": 0.22,      # Low beta protects
+            "qmj": 0.30,      # Quality is defensive
+            "upside": 0.13,   # Value traps possible
+            "pead": 0.10,     # P3: Weaker in bear
+            "sentiment": 0.12,# P4: Sentiment less reliable in bear
+            "accruals": 0.05,
             "ivol": 0.00
         },
         "Transition": {
-            "vsm": 0.20,
-            "bab": 0.25,
-            "qmj": 0.30,
-            "upside": 0.25,
-            "accruals": 0.00,
+            "vsm": 0.17,
+            "bab": 0.17,
+            "qmj": 0.22,
+            "upside": 0.17,
+            "pead": 0.10,     # P3: Moderate
+            "sentiment": 0.12,# P4: Moderate
+            "accruals": 0.05,
             "ivol": 0.00
         },
         "Unknown": {
-            "vsm": 0.25,
-            "bab": 0.20,
-            "qmj": 0.30,
-            "upside": 0.25,
-            "accruals": 0.00,
+            "vsm": 0.20,
+            "bab": 0.13,
+            "qmj": 0.22,
+            "upside": 0.17,
+            "pead": 0.10,     # P3: Default
+            "sentiment": 0.13,# P4: Default
+            "accruals": 0.05,
             "ivol": 0.00
         }
     }

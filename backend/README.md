@@ -1,6 +1,6 @@
-# DCA Quant Backend
+# DCA Quant Backend (Tier-1 Hedge Fund Grade)
 
-The **DCA Quant Backend** is a sophisticated, event-driven quantitative trading engine designed to replicate hedge-fund grade workflows. It handles the entire lifecycle of algorithmic trading: from data ingestion and intrinsic valuation to multi-factor ranking, portfolio optimization, and realistic backtesting.
+The **DCA Quant Backend** is a sophisticated, event-driven quantitative trading engine designed to replicate hedge-fund grade workflows. It handles the entire lifecycle of algorithmic trading: from data ingestion and intrinsic valuation to multi-factor ranking, regime detection, portfolio optimization, and robust backtesting.
 
 ---
 
@@ -13,11 +13,18 @@ graph TD
     subgraph Data Layer
         YF[YFinance Provider] -->|Raw Data| DL[Data Lake / SQL]
         DL -->|Price & Fundamentals| FE[Feature Engineering]
+        DL -->|News & Transcripts| NLP[Sentiment Engine]
+    end
+
+    subgraph Regime Layer
+        DL -->|Benchmark Returns| HMM[HMM Regime Detector]
+        HMM -->|Bull/Bear State| RE
     end
 
     subgraph Alpha Engine
-        FE -->|VSM, BAB, QMJ| RE[Ranking Engine]
-        RE -->|Composite Score| SG[Signal Generation]
+        FE -->|VSM, BAB, QMJ, PEAD| RE[Ranking Engine v3]
+        NLP -->|Sentiment Score| RE
+        RE -->|Regime-Weighted Score| SG[Signal Generation]
     end
 
     subgraph Valuation Engine
@@ -27,22 +34,26 @@ graph TD
 
     subgraph Portfolio Construction
         SG -->|Top Picks| PO[Portfolio Optimizer]
-        PO -->|Target Weights| DB[Database]
+        PO -->|HRP / Black-Litterman| DB[Database]
     end
 
     subgraph Execution & Verification
         DB -->|Targets| BE[Backtest Engine]
-        BE -->|Equity Curve| MD[Metrics Dashboard]
+        BE -->|Purged CV / DSR| VF[Validation Framework]
     end
 ```
 
 ### Core Components
 
-*   **Data Layer (`quant.data`)**: Manages the schema (SQLAlchemy) and data ingestion. It abstracts the data source (YFinance) behind a provider interface, allowing for future swappability (e.g., Bloomberg, Polygon).
-*   **Valuation Engine (`quant.valuation`)**: A fundamental analysis engine that determines the "intrinsic value" of assets using models like DCF and DDM.
-*   **Alpha Engine (`quant.features`, `quant.selection`)**: Generates predictive signals based on academic factors (Momentum, Quality, Low Beta).
-*   **Portfolio Optimizer (`quant.portfolio`)**: Uses convex optimization (CVXPY) to construct efficient portfolios that maximize expected return for a given risk level.
-*   **Backtest Engine (`quant.backtest`)**: A realistic simulator that accounts for transaction costs, slippage, and market impact.
+*   **Data Layer (`quant.data`)**: Manages the schema (SQLAlchemy) and data ingestion. Abstracts data sources (YFinance) and handles caching.
+*   **Regime Layer (`quant.regime`)**: Uses Hidden Markov Models (HMM) to detect market regimes (Bull/Bear) and adjust factor weights dynamically.
+*   **Alpha Engine (`quant.features`, `quant.selection`)**: Generates predictive signals based on:
+    *   **Risk Factors**: Volatility-Scaled Momentum (VSM), Betting-Against-Beta (BAB), Idiosyncratic Volatility (IVOL).
+    *   **Quality Factors**: Quality-Minus-Junk (QMJ), Accruals Anomaly.
+    *   **Behavioral Factors**: Post-Earnings Announcement Drift (PEAD), NLP Sentiment (FinBERT).
+*   **Valuation Engine (`quant.valuation`)**: Determines "intrinsic value" using DCF, DDM, and REIT models.
+*   **Portfolio Optimizer (`quant.portfolio`)**: Constructs efficient portfolios using Hierarchical Risk Parity (HRP) or Black-Litterman models.
+*   **Validation Framework (`quant.backtest.validation`)**: Ensures strategy robustness using Purged Walk-Forward Cross-Validation and Deflated Sharpe Ratio (DSR).
 
 ---
 
@@ -57,26 +68,30 @@ backend/
 │   ├── core/                   # Configuration, Database, Logging
 │   └── services/               # Application Services
 ├── quant/                      # Quantitative Core (The "Brain")
-│   ├── backtest/               # Simulation Engine
+│   ├── backtest/               # Simulation & Validation
 │   │   ├── engine.py           # Event-Driven Backtester
-│   │   └── walk_forward.py     # Walk-Forward Analysis
+│   │   ├── validation.py       # Purged Walk-Forward CV
+│   │   └── statistics.py       # Deflated Sharpe Ratio
 │   ├── data/                   # Data Access Layer
-│   │   ├── models.py           # SQLAlchemy ORM Models
-│   │   └── dao.py              # Data Access Objects
 │   ├── features/               # Alpha Factor Library
-│   │   ├── volatility.py       # Volatility-Scaled Momentum (VSM)
-│   │   ├── beta.py             # Betting-Against-Beta (BAB)
-│   │   └── quality.py          # Quality-Minus-Junk (QMJ)
+│   │   ├── pead.py             # Post-Earnings Announcement Drift
+│   │   ├── sentiment.py        # NLP Sentiment Analysis
+│   │   ├── volatility.py       # VSM, IVOL
+│   │   ├── beta.py             # BAB
+│   │   └── quality.py          # QMJ, Accruals
 │   ├── portfolio/              # Portfolio Construction
-│   │   └── optimizer.py        # Mean-Variance Optimizer (MVO)
+│   │   ├── optimizer.py        # Optimization Orchestrator
+│   │   └── advanced_optimizers.py # HRP, Black-Litterman
+│   ├── regime/                 # Market Regime Detection
+│   │   └── hmm.py              # Hidden Markov Model
 │   ├── selection/              # Signal Generation
-│   │   └── ranking.py          # Composite Ranking Logic
+│   │   └── ranking.py          # RankingEngine v3 (Dynamic Weights)
 │   └── valuation/              # Intrinsic Valuation
 │       ├── orchestrator.py     # Model Selection Logic
 │       └── models/             # DCF, DDM, REIT Models
 ├── scripts/                    # Operational Workflows
 │   ├── run_daily_job.py        # End-to-End Pipeline Entrypoint
-│   └── seed_securities.py      # Universe Management
+│   └── verify_ranking_v3.py    # Verification Script
 └── tests/                      # Test Suite (Pytest)
 ```
 
@@ -84,64 +99,59 @@ backend/
 
 ## 3. Detailed Workflows
 
-### 3.1 Daily Signal Generation Pipeline
-The `run_daily_job.py` script is the heartbeat of the system. It executes the following steps:
+### 3.1 Daily Signal Generation Pipeline (RankingEngine v3)
+The `run_daily_job.py` script executes the following steps:
 
-1.  **Universe Selection**: Loads active securities (S&P 500 + Nasdaq 100) from the database.
-2.  **Data Ingestion**:
-    *   Fetches 2 years of OHLCV data and latest financial statements via `YFinanceProvider`.
-    *   Handles rate limits and missing data gracefully.
+1.  **Universe Selection**: Loads active securities (S&P 500 + Nasdaq 100).
+2.  **Regime Detection**:
+    *   Fits Gaussian HMM to SPY returns.
+    *   Predicts current state: **Bull** (Low Vol) or **Bear** (High Vol).
 3.  **Factor Computation**:
-    *   **VSM**: 12-month return / 1-year realized volatility.
-    *   **BAB**: Leveraged low-beta vs. high-beta (Frazzini & Pedersen, 2014).
-    *   **QMJ**: Composite of Profitability, Growth, Safety, and Payout (Asness et al., 2013).
-    *   **Upside**: `(Fair Value - Price) / Price` from the Valuation Engine.
-4.  **Ranking & Scoring**:
-    *   Normalizes raw factors into Z-Scores.
-    *   Neutralizes scores by sector (Sector-Neutral Ranking).
-    *   Computes a weighted composite score: `30% VSM + 20% BAB + 30% QMJ + 20% Upside`.
+    *   **VSM/BAB/QMJ**: Core risk and quality factors.
+    *   **PEAD**: Earnings surprise and momentum.
+    *   **Sentiment**: News/Earnings call sentiment via NLP.
+    *   **Upside**: Valuation gap from DCF/DDM models.
+4.  **Dynamic Scoring**:
+    *   Weights are adjusted based on Regime:
+        *   **Bull**: Overweight Momentum (VSM) and Growth.
+        *   **Bear**: Overweight Quality (QMJ) and Low Beta (BAB).
 5.  **Portfolio Optimization**:
-    *   Selects the top 50 ranked assets.
-    *   Runs Mean-Variance Optimization (MVO) to find optimal weights.
-    *   Constraints: Long-only (`w >= 0`), Max weight 10% (`w <= 0.10`), Fully invested (`sum(w) == 1`).
+    *   **HRP**: Clusters assets by correlation to minimize portfolio variance without matrix inversion issues.
+    *   **Black-Litterman**: Blends market equilibrium with our Alpha views.
 
 ### 3.2 Valuation Logic
-The `ValuationOrchestrator` dynamically selects the appropriate model for each asset:
+The `ValuationOrchestrator` dynamically selects the appropriate model:
 
 | Sector | Model | Logic |
 | :--- | :--- | :--- |
-| **Financial Services** | **DDM** | Dividend Discount Model or Excess Return Model. Banks are valued on equity/dividends. |
-| **Real Estate** | **REIT Model** | Focuses on FFO (Funds From Operations) and NAV. |
-| **Technology / General** | **DCF** | Discounted Cash Flow. Projects FCFF for 5-10 years + Terminal Value (Gordon Growth). |
+| **Financial Services** | **DDM** | Dividend Discount Model. |
+| **Real Estate** | **REIT Model** | FFO (Funds From Operations) and NAV. |
+| **Technology / General** | **DCF** | Discounted Cash Flow (5-10yr FCFF + Terminal). |
 
 ---
 
 ## 4. Operational Guide
 
 ### Adding a New Ticker
-To add a new stock to the tracked universe:
 ```bash
-# Add to seed_securities.py list or run SQL
 sqlite3 data/database.sqlite "INSERT INTO securities (ticker, name, active) VALUES ('NVDA', 'NVIDIA Corp', 1);"
 ```
 
-### Running Backtests
-To verify strategy performance over a historical period:
-```python
-from quant.backtest.walk_forward import WalkForwardBacktester
-from app.core.database import get_db
-
-db = next(get_db())
-backtester = WalkForwardBacktester(db)
-results = backtester.run(start_date=date(2023, 1, 1), end_date=date(2024, 1, 1))
-print(results['metrics']) # Sharpe, CAGR, MaxDD
+### Running the Daily Job
+```bash
+python -m scripts.run_daily_job
 ```
 
-### Troubleshooting "N/A" Signals
-If the dashboard shows "N/A" or "0.0":
-1.  **Check Logs**: Look for `YFinance rate limit` or `Missing financial statements`.
-2.  **Verify Data**: Use `sqlite3` to check if `model_signals` has valid `metadata_json`.
-3.  **Run Debug Script**: Use `scripts/debug_valuation_details.py` to inspect specific tickers.
+### Verifying Signals
+```bash
+python -m scripts.verify_ranking_v3
+```
+
+### Running Validation Tests
+To verify strategy robustness (DSR, PurgedCV):
+```bash
+pytest tests/test_validation_framework.py
+```
 
 ---
 
@@ -149,7 +159,7 @@ If the dashboard shows "N/A" or "0.0":
 
 ### Prerequisites
 *   **Python 3.10+**
-*   **SQLite** (Included)
+*   **SQLite**
 
 ### Installation
 ```bash
@@ -163,19 +173,8 @@ pip install -r requirements.txt
 fastapi dev main.py
 ```
 
-### Running Tests
-```bash
-pytest tests/
-```
+### API Reference
+*   `GET /api/v1/quant/rankings`: Get latest v3 ranking signals.
+*   `GET /api/v1/quant/signals`: Get historical signals with metadata.
 
----
-
-## 6. API Reference
-
-The backend exposes a REST API via FastAPI.
-
-*   `GET /api/v1/quant/signals`: Get latest ranking signals.
-*   `GET /api/v1/quant/valuation/{ticker}`: Get detailed valuation model output.
-*   `GET /api/v1/quant/backtest/run`: Trigger an on-demand backtest.
-
-See `http://localhost:8000/docs` for the interactive Swagger UI.
+See `http://localhost:8000/docs` for Swagger UI.

@@ -14,7 +14,7 @@ const SignalsDashboard: React.FC = () => {
     const itemsPerPage = 20;
     
     // Sorting State
-    const [sortConfig, setSortConfig] = useState<{ key: keyof Signal | 'momentum' | 'valuation' | 'vsm' | 'bab' | 'qmj' | 'upside'; direction: 'asc' | 'desc' }>({
+    const [sortConfig, setSortConfig] = useState<{ key: keyof Signal | 'momentum' | 'valuation' | 'vsm' | 'bab' | 'qmj' | 'upside' | 'pead' | 'sentiment'; direction: 'asc' | 'desc' }>({
         key: 'score',
         direction: 'desc'
     });
@@ -77,6 +77,14 @@ const SignalsDashboard: React.FC = () => {
                              aValue = metaA.momentum ?? metaA.vsm ?? -999;
                              bValue = metaB.momentum ?? metaB.vsm ?? -999;
                              break;
+                        case 'pead':
+                             aValue = metaA.pead ?? -999;
+                             bValue = metaB.pead ?? -999;
+                             break;
+                        case 'sentiment':
+                             aValue = metaA.sentiment ?? -999;
+                             bValue = metaB.sentiment ?? -999;
+                             break;
                     }
                 }
 
@@ -133,6 +141,8 @@ const SignalsDashboard: React.FC = () => {
                                                 <TableHead className="font-semibold cursor-pointer hover:text-primary" onClick={() => requestSort('ticker')}>Ticker</TableHead>
                                                 <TableHead className="font-semibold">Model</TableHead>
                                                 <TableHead className="font-semibold text-right cursor-pointer hover:text-primary" onClick={() => requestSort('score')}>Score</TableHead>
+                                                <TableHead className="font-semibold text-right cursor-pointer hover:text-primary" onClick={() => requestSort('pead')}>PEAD</TableHead>
+                                                <TableHead className="font-semibold text-right cursor-pointer hover:text-primary" onClick={() => requestSort('sentiment')}>Sent.</TableHead>
                                                 <TableHead className="font-semibold text-right cursor-pointer hover:text-primary" onClick={() => requestSort('vsm')}>VSM</TableHead>
                                                 <TableHead className="font-semibold text-right cursor-pointer hover:text-primary" onClick={() => requestSort('bab')}>BAB</TableHead>
                                                 <TableHead className="font-semibold text-right cursor-pointer hover:text-primary" onClick={() => requestSort('qmj')}>QMJ</TableHead>
@@ -143,24 +153,38 @@ const SignalsDashboard: React.FC = () => {
                                         <TableBody>
                                             {currentSignals.map((signal) => {
                                                 const meta = JSON.parse(signal.metadata_json || '{}');
-                                                // Handle legacy v1 vs v2
+                                                // Handle legacy v1 vs v2 vs v3
                                                 const vsm = meta.vsm ?? meta.momentum; // Fallback to momentum for v1
                                                 const bab = meta.bab ?? 0;
                                                 const qmj = meta.qmj ?? 0;
                                                 const upside = meta.upside ?? meta.earnings_yield; // Fallback to E/Y for v1
+                                                const pead = meta.pead ?? 0;
+                                                const sentiment = meta.sentiment ?? 0;
+                                                
+                                                // Format model name (remove duplicate v)
+                                                const modelName = signal.model_name.replace('ranking_', '').toUpperCase();
+                                                
+                                                // Sentiment icon
+                                                const sentimentIcon = sentiment > 0.1 ? '🟢' : sentiment < -0.1 ? '🔴' : '🟡';
                                                 
                                                 return (
                                                     <TableRow key={signal.id} className="hover:bg-muted/50 transition-colors">
                                                         <TableCell className="font-medium">{signal.ticker}</TableCell>
                                                         <TableCell>
                                                             <Badge variant="outline" className="font-normal">
-                                                                {signal.model_name} v{signal.model_version}
+                                                                {modelName}
                                                             </Badge>
                                                         </TableCell>
                                                         <TableCell className="text-right">
                                                             <span className={`px-2 py-1 rounded text-white text-xs font-bold ${getScoreColor(signal.score)}`}>
                                                                 {signal.score.toFixed(2)}
                                                             </span>
+                                                        </TableCell>
+                                                        <TableCell className={`text-right text-sm ${pead > 0.5 ? 'text-green-400' : pead < -0.5 ? 'text-red-400' : 'text-muted-foreground'}`}>
+                                                            {pead !== undefined && pead !== null ? pead.toFixed(2) : 'N/A'}
+                                                        </TableCell>
+                                                        <TableCell className="text-right text-sm text-muted-foreground">
+                                                            {sentimentIcon} {sentiment !== undefined && sentiment !== null ? sentiment.toFixed(2) : 'N/A'}
                                                         </TableCell>
                                                         <TableCell className="text-right text-sm text-muted-foreground">
                                                             {vsm !== undefined && vsm !== null ? vsm.toFixed(2) : 'N/A'}
@@ -171,7 +195,7 @@ const SignalsDashboard: React.FC = () => {
                                                         <TableCell className="text-right text-sm text-muted-foreground">
                                                             {qmj !== undefined && qmj !== null ? qmj.toFixed(2) : 'N/A'}
                                                         </TableCell>
-                                                        <TableCell className="text-right text-sm text-muted-foreground">
+                                                        <TableCell className={`text-right text-sm ${upside > 0 ? 'text-green-400' : 'text-red-400'}`}>
                                                             {upside !== undefined && upside !== null ? (upside * 100).toFixed(1) + '%' : 'N/A'}
                                                         </TableCell>
                                                         <TableCell className="text-right text-sm text-muted-foreground">
@@ -182,7 +206,7 @@ const SignalsDashboard: React.FC = () => {
                                             })}
                                             {signals.length === 0 && (
                                                 <TableRow>
-                                                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                                                <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
                                                         No signals found. Run the daily job to generate signals.
                                                     </TableCell>
                                                 </TableRow>
