@@ -32,12 +32,14 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .hypothesis/
+*.pyc
 
 # Backend data & outputs
 backend/logs/
 backend/mlruns/
 backend/data_lake/
 backend/reports/
+*.sqlite
 
 # Environment variables
 .env

@@ -14,8 +14,8 @@ def read_portfolios(db: Session = Depends(database.get_db)):
     return portfolio_service.get_portfolios(db)
 
 @router.post("/portfolios", response_model=schemas.Portfolio)
-def create_portfolio(name: str, db: Session = Depends(database.get_db)):
-    return portfolio_service.create_portfolio(db, name)
+def create_portfolio(portfolio: schemas.PortfolioCreate, db: Session = Depends(database.get_db)):
+    return portfolio_service.create_portfolio(db, portfolio.name)
 
 @router.get("/config/{portfolio_id}", response_model=schemas.PortfolioConfig)
 def read_portfolio_config(portfolio_id: int, db: Session = Depends(database.get_db)):
