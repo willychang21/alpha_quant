@@ -8,18 +8,93 @@ A production-ready, institutional-grade quantitative trading platform implementi
 
 ## Table of Contents
 
-1. [Executive Summary](#1-executive-summary)
-2. [System Architecture](#2-system-architecture)
-3. [Directory Structure](#3-directory-structure)
-4. [Core Components](#4-core-components)
-5. [API Reference](#5-api-reference)
-6. [Data Models & Schemas](#6-data-models--schemas)
-7. [Operational Guide](#7-operational-guide)
-8. [Development Setup](#8-development-setup)
-9. [Testing Strategy](#9-testing-strategy)
-10. [Performance Considerations](#10-performance-considerations)
-11. [Design Decisions & Trade-offs](#11-design-decisions--trade-offs)
-12. [References](#12-references)
+- [DCA Quant Backend](#dca-quant-backend)
+  - [Table of Contents](#table-of-contents)
+  - [1. Executive Summary](#1-executive-summary)
+    - [1.1 Overview](#11-overview)
+    - [1.2 Key Capabilities](#12-key-capabilities)
+    - [1.3 Technology Stack](#13-technology-stack)
+  - [2. System Architecture](#2-system-architecture)
+    - [2.1 High-Level Architecture](#21-high-level-architecture)
+    - [2.2 Data Flow Pipeline](#22-data-flow-pipeline)
+    - [2.3 Component Interaction Matrix](#23-component-interaction-matrix)
+  - [3. Directory Structure](#3-directory-structure)
+  - [4. Core Components](#4-core-components)
+    - [4.1 Data Layer](#41-data-layer)
+      - [4.1.1 DataProvider Abstraction](#411-dataprovider-abstraction)
+      - [4.1.2 Point-in-Time (PIT) Data Access](#412-point-in-time-pit-data-access)
+      - [4.1.3 Signal Store](#413-signal-store)
+    - [4.2 Alpha Engine](#42-alpha-engine)
+      - [4.2.1 Factor Zoo](#421-factor-zoo)
+      - [4.2.2 Factor Implementation Example: VSM](#422-factor-implementation-example-vsm)
+      - [4.2.3 Factor Pipeline](#423-factor-pipeline)
+      - [4.2.4 HMM Regime Detection](#424-hmm-regime-detection)
+      - [4.2.5 Dynamic Factor Weighting](#425-dynamic-factor-weighting)
+    - [4.3 Machine Learning Layer](#43-machine-learning-layer)
+      - [4.3.1 Triple Barrier Labeling](#431-triple-barrier-labeling)
+      - [4.3.2 Meta-Labeling (XGBoost)](#432-meta-labeling-xgboost)
+      - [4.3.3 Genetic Hyperparameter Optimization](#433-genetic-hyperparameter-optimization)
+    - [4.4 Portfolio Construction](#44-portfolio-construction)
+      - [4.4.1 Optimizer Selection](#441-optimizer-selection)
+      - [4.4.2 Hierarchical Risk Parity (HRP)](#442-hierarchical-risk-parity-hrp)
+      - [4.4.3 Multivariate Kelly Criterion](#443-multivariate-kelly-criterion)
+      - [4.4.4 Volatility Targeting](#444-volatility-targeting)
+    - [4.5 Execution \& Risk](#45-execution--risk)
+      - [4.5.1 VWAP Execution Algorithm](#451-vwap-execution-algorithm)
+      - [4.5.2 Component VaR Decomposition](#452-component-var-decomposition)
+      - [4.5.3 Tail Hedging](#453-tail-hedging)
+    - [4.6 Infrastructure](#46-infrastructure)
+      - [4.6.1 Distributed Backtesting (Ray)](#461-distributed-backtesting-ray)
+      - [4.6.2 Purged Walk-Forward Cross-Validation](#462-purged-walk-forward-cross-validation)
+      - [4.6.3 Statistical Validation](#463-statistical-validation)
+      - [4.6.4 MLflow Model Registry](#464-mlflow-model-registry)
+      - [4.6.5 Experiment Store](#465-experiment-store)
+  - [5. API Reference](#5-api-reference)
+    - [5.1 REST Endpoints](#51-rest-endpoints)
+      - [Base URL: `/api/v1`](#base-url-apiv1)
+    - [5.2 Endpoint Details](#52-endpoint-details)
+      - [GET `/quant/rankings`](#get-quantrankings)
+      - [GET `/quant/risk/metrics`](#get-quantriskmetrics)
+      - [GET `/quant/dashboard/summary`](#get-quantdashboardsummary)
+  - [6. Data Models \& Schemas](#6-data-models--schemas)
+    - [6.1 SQLAlchemy ORM Models](#61-sqlalchemy-orm-models)
+    - [6.2 Parquet Schemas](#62-parquet-schemas)
+      - [Signals Schema](#signals-schema)
+      - [Targets Schema](#targets-schema)
+  - [7. Operational Guide](#7-operational-guide)
+    - [7.1 Daily Operations](#71-daily-operations)
+      - [7.1.1 Daily Update Workflow](#711-daily-update-workflow)
+      - [7.1.2 Ranking Job Flow](#712-ranking-job-flow)
+    - [7.2 Weekly Operations](#72-weekly-operations)
+      - [7.2.1 Genetic Optimization](#721-genetic-optimization)
+    - [7.3 Monitoring \& Alerting](#73-monitoring--alerting)
+      - [7.3.1 Logging Configuration](#731-logging-configuration)
+      - [7.3.2 Key Metrics to Monitor](#732-key-metrics-to-monitor)
+  - [8. Development Setup](#8-development-setup)
+    - [8.1 Prerequisites](#81-prerequisites)
+    - [8.2 Installation](#82-installation)
+    - [8.3 Environment Configuration](#83-environment-configuration)
+    - [8.4 Running the Server](#84-running-the-server)
+  - [9. Testing Strategy](#9-testing-strategy)
+    - [9.1 Test Categories](#91-test-categories)
+    - [9.2 Running Tests](#92-running-tests)
+    - [9.3 Key Test Cases](#93-key-test-cases)
+  - [10. Performance Considerations](#10-performance-considerations)
+    - [10.1 DuckDB Query Optimization](#101-duckdb-query-optimization)
+    - [10.2 Price Cache Strategy](#102-price-cache-strategy)
+    - [10.3 Ray Parallelization Patterns](#103-ray-parallelization-patterns)
+    - [10.4 Memory Management](#104-memory-management)
+  - [11. Design Decisions \& Trade-offs](#11-design-decisions--trade-offs)
+    - [11.1 Parquet over SQLite for Signals](#111-parquet-over-sqlite-for-signals)
+    - [11.2 HRP as Default Optimizer](#112-hrp-as-default-optimizer)
+    - [11.3 Half-Kelly Fractional Sizing](#113-half-kelly-fractional-sizing)
+    - [11.4 Embargo Period Calculation](#114-embargo-period-calculation)
+  - [12. References](#12-references)
+    - [Academic Papers](#academic-papers)
+    - [Factor Research](#factor-research)
+    - [Implementation Guides](#implementation-guides)
+  - [License](#license)
+  - [Contributing](#contributing)
 
 ---
 
@@ -194,6 +269,9 @@ backend/
 │   │   ├── database.py              # SQLAlchemy session management
 │   │   └── logging_config.py        # Structured logging setup
 │   │
+│   ├── data/                        # Data providers
+│   │   └── providers/               # Data provider implementations
+│   │
 │   ├── domain/                      # Domain models
 │   │   ├── models.py                # SQLAlchemy ORM models (Portfolio, Holding)
 │   │   └── schemas.py               # Pydantic request/response schemas
@@ -207,7 +285,8 @@ backend/
 │   └── services/                    # Service layer
 │       ├── market_data.py           # Market data service
 │       ├── portfolio_service.py     # Portfolio management
-│       └── valuation_service.py     # Valuation orchestration
+│       ├── valuation_service.py     # Valuation orchestration
+│       └── valuation.py             # Valuation utilities
 │
 ├── quant/                           # Quantitative Core Engine
 │   ├── data/                        # Data access layer
@@ -216,7 +295,12 @@ backend/
 │   │   ├── experiment_store.py      # Backtest lineage tracking
 │   │   ├── parquet_io.py            # Parquet read/write utilities
 │   │   ├── pit_manager.py           # Point-in-Time data manager
+│   │   ├── catalog.py               # Data catalog management
+│   │   ├── data_catalog.json        # Data catalog configuration
+│   │   ├── db_ops.py                # Database operations
+│   │   ├── ingestion.py             # Data ingestion utilities
 │   │   ├── models.py                # SQLAlchemy models (Security, MarketData)
+│   │   ├── versioning.py            # Data versioning
 │   │   └── realtime/                # Real-time streaming
 │   │       ├── interface.py         # StreamClient abstract base
 │   │       ├── connection_manager.py # WebSocket management
@@ -225,6 +309,8 @@ backend/
 │   ├── features/                    # Alpha factor library
 │   │   ├── base.py                  # Factor base class
 │   │   ├── pipeline.py              # Factor processing pipeline
+│   │   ├── registry.py              # Factor registry
+│   │   ├── caching.py               # Factor caching utilities
 │   │   ├── volatility.py            # Volatility Scaled Momentum (VSM)
 │   │   ├── beta.py                  # Betting Against Beta (BAB)
 │   │   ├── quality.py               # Quality Minus Junk (QMJ)
@@ -233,15 +319,24 @@ backend/
 │   │   ├── accruals.py              # Accruals anomaly
 │   │   ├── ivol.py                  # Idiosyncratic volatility
 │   │   ├── revisions.py             # Analyst revisions
+│   │   ├── fundamental.py           # Fundamental factors
+│   │   ├── technical.py             # Technical indicators
 │   │   ├── labeling.py              # Triple Barrier Method
 │   │   ├── meta_labeling.py         # XGBoost meta-labeler
 │   │   └── valuation_composite.py   # Composite valuation score
 │   │
+│   ├── factors/                     # Factor engine
+│   │   └── engine.py                # Factor computation engine
+│   │
 │   ├── regime/                      # Market regime detection
+│   │   ├── __init__.py              # Module init
 │   │   └── hmm.py                   # Gaussian HMM + Dynamic Weights
 │   │
 │   ├── selection/                   # Stock selection
 │   │   └── ranking.py               # Multi-factor ranking engine
+│   │
+│   ├── signals/                     # Signal management
+│   │   └── schema.py                # Signal schemas
 │   │
 │   ├── portfolio/                   # Portfolio construction
 │   │   ├── optimizer.py             # Main optimizer (MVO, HRP, BL, Kelly)
@@ -260,9 +355,13 @@ backend/
 │   │   ├── engine.py                # Main backtest engine
 │   │   ├── factor_engine.py         # Point-in-time factor backtest
 │   │   ├── distributed.py           # Ray-based parallel backtester
+│   │   ├── parallel.py              # Parallel execution utilities
 │   │   ├── validation.py            # Purged Walk-Forward CV
 │   │   ├── statistics.py            # Deflated Sharpe Ratio, PSR
 │   │   ├── walk_forward.py          # Walk-forward optimization
+│   │   ├── event_engine.py          # Event-driven backtest engine
+│   │   ├── simulator.py             # Market simulator
+│   │   ├── interface.py             # Backtest interfaces
 │   │   └── execution/               # Execution simulation
 │   │       ├── slippage.py          # Slippage models
 │   │       ├── fill_model.py        # Order fill simulation
@@ -271,7 +370,9 @@ backend/
 │   ├── valuation/                   # Intrinsic valuation
 │   │   ├── engine.py                # Valuation engine
 │   │   ├── orchestrator.py          # Model selection logic
+│   │   ├── service.py               # Valuation service
 │   │   └── models/                  # Valuation models
+│   │       ├── base.py              # Base valuation model
 │   │       ├── dcf.py               # Discounted Cash Flow
 │   │       ├── ddm.py               # Dividend Discount Model
 │   │       └── reit.py              # REIT-specific valuation
@@ -281,6 +382,16 @@ backend/
 │   │
 │   ├── mlops/                       # MLOps infrastructure
 │   │   └── registry.py              # MLflow model registry wrapper
+│   │
+│   ├── model_registry/              # Model versioning & artifacts
+│   │   ├── registry.py              # Model registry implementation
+│   │   ├── schema.py                # Registry schemas
+│   │   ├── snapshots.py             # Data snapshot management
+│   │   ├── artifacts/               # Model artifacts storage
+│   │   └── data_snapshots/          # Data snapshots
+│   │
+│   ├── utils/                       # Utility functions
+│   │   └── financials.py            # Financial calculations
 │   │
 │   └── reporting/                   # Output generation
 │       └── trade_list.py            # Trade list generator
@@ -305,9 +416,16 @@ backend/
 │   └── repository.py                # Asset repository
 │
 ├── services/                        # Additional service modules
-│   ├── data/                        # Data services
-│   ├── portfolio/                   # Portfolio services
-│   └── valuation/                   # Valuation services
+│   ├── data/
+│   │   └── main.py                  # Data service entry
+│   ├── portfolio/
+│   │   └── main.py                  # Portfolio service entry
+│   └── valuation/
+│       └── main.py                  # Valuation service entry
+│
+├── backtests/                       # Backtest implementations
+│   ├── backtest_time_machine.py     # Time machine backtest
+│   └── backtest_valuation.py        # Valuation backtest
 │
 ├── scripts/                         # Operational scripts
 │   ├── daily_update.py              # Daily data refresh
@@ -316,18 +434,22 @@ backend/
 │   ├── run_backtest.py              # Manual backtest execution
 │   ├── download_history.py          # Historical data download
 │   ├── seed_securities.py           # Universe seeding
-│   └── register_models.py           # Model registration
+│   ├── register_models.py           # Model registration
+│   ├── migrate_*.py                 # Data migration scripts
+│   ├── debug_*.py                   # Debug utilities
+│   ├── verify_*.py                  # Verification scripts
+│   └── test_*.py                    # Test scripts
 │
 ├── tests/                           # Test suite
 │   ├── conftest.py                  # Pytest fixtures
 │   ├── test_api.py                  # API integration tests
-│   ├── test_backtest_engine.py      # Backtest unit tests
+│   ├── test_backtest*.py            # Backtest tests
 │   ├── test_tier2_*.py              # Tier-2 feature tests
 │   ├── test_tier3_*.py              # Tier-3 feature tests
-│   └── test_walk_forward.py         # CV validation tests
+│   ├── test_walk_forward.py         # CV validation tests
+│   └── test_*.py                    # Other unit tests
 │
-├── data/                            # SQLite database (legacy)
-│   └── database.sqlite
+├── config/                          # Configuration files
 │
 ├── data_lake/                       # Parquet data storage
 │   ├── raw/                         # Raw ingested data
@@ -335,11 +457,19 @@ backend/
 │   │   ├── fundamentals/            # Fundamental data
 │   │   └── securities/              # Universe definitions
 │   ├── processed/                   # Computed outputs
+│   │   ├── factors/                 # Computed factors
 │   │   ├── signals/                 # Ranking signals
 │   │   └── targets/                 # Portfolio targets
-│   └── experiments/                 # Backtest runs with lineage
+│   ├── experiments/                 # Backtest runs with lineage
+│   └── snapshots/                   # Data snapshots
 │
-└── mlruns/                          # MLflow tracking directory
+├── logs/                            # Application logs
+│
+├── mlruns/                          # MLflow tracking directory
+│
+├── docs/                            # Documentation
+├── examples/                        # Example scripts
+└── reports/                         # Generated reports
 ```
 
 ---
@@ -435,6 +565,7 @@ latest = store.get_latest_signals(model_name='ranking_v3', limit=100)
 **Directory Structure:**
 ```
 data_lake/processed/
+├── factors/                         # Computed factor values
 ├── signals/
 │   └── ranking_v3_2024-12-05.parquet
 └── targets/
@@ -459,6 +590,8 @@ The system implements 8+ academically-validated alpha factors:
 | **Accruals** | `accruals.py` | Accruals Anomaly | Sloan (1996) |
 | **IVOL** | `ivol.py` | Idiosyncratic Volatility | Ang et al. (2006) |
 | **Revisions** | `revisions.py` | Analyst Estimate Revisions | Chan et al. (1996) |
+| **Fundamental** | `fundamental.py` | Fundamental factors | Various |
+| **Technical** | `technical.py` | Technical indicators | Various |
 
 #### 4.2.2 Factor Implementation Example: VSM
 
@@ -1135,9 +1268,7 @@ class PurgedWalkForwardCV:
         X: pd.DataFrame, 
         pred_times: pd.Series  # Index=entry time, Value=label realization time
     ) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
-        """
-        Generate purged train/test indices.
-        """
+        """Generate purged train/test indices."""
         n_samples = X.shape[0]
         embargo = int(n_samples * self.embargo_pct)
         
@@ -1154,8 +1285,6 @@ class PurgedWalkForwardCV:
                 t_start = pred_times.index[i]
                 t_end = pred_times.iloc[i]
                 
-                # No overlap if: train ends before test starts OR
-                #                train starts after test ends
                 if t_end <= test_start or t_start >= test_end:
                     valid_train.append(i)
             
@@ -1174,17 +1303,12 @@ class PurgedWalkForwardCV:
 ```python
 # quant/backtest/statistics.py
 
-def deflated_sharpe_ratio(
-    returns: pd.Series, 
-    trials: int = 1
-) -> float:
+def deflated_sharpe_ratio(returns: pd.Series, trials: int = 1) -> float:
     """
     Deflated Sharpe Ratio (DSR) adjusts for multiple testing bias.
     
     Accounts for the fact that testing many strategies inflates
     the probability of finding a "significant" result by chance.
-    
-    DSR = P(True SR > Expected Max SR from N random trials)
     """
     sr = sharpe_ratio(returns)
     var_sr = estimated_sharpe_ratio_variance(returns)
@@ -1200,15 +1324,8 @@ def deflated_sharpe_ratio(
     z = (sr - benchmark_sr) / np.sqrt(var_sr * 252)
     return norm.cdf(z)
 
-def probabilistic_sharpe_ratio(
-    returns: pd.Series, 
-    benchmark_sr: float = 0.0
-) -> float:
-    """
-    Probability that true SR exceeds benchmark SR.
-    
-    PSR = Φ((SR - SR_benchmark) / √Var(SR))
-    """
+def probabilistic_sharpe_ratio(returns: pd.Series, benchmark_sr: float = 0.0) -> float:
+    """Probability that true SR exceeds benchmark SR."""
     sr = sharpe_ratio(returns)
     var_sr = estimated_sharpe_ratio_variance(returns) * 252
     
@@ -1224,12 +1341,6 @@ def probabilistic_sharpe_ratio(
 class ModelRegistry:
     """
     MLflow wrapper for experiment tracking and model versioning.
-    
-    Features:
-        - Hyperparameter logging
-        - Metric tracking per step
-        - Model artifact storage
-        - Best run retrieval
     """
     
     def __init__(self, experiment_name: str, tracking_uri: str = "mlruns"):
@@ -1335,6 +1446,11 @@ class ExperimentStore:
 | `/quant/weekly/trades` | GET | Weekly trade list | - |
 | `/quant/dashboard/summary` | GET | Aggregated dashboard | - |
 | `/quant/backtest/run` | GET | Full backtest with benchmarks | `start_year`, `end_year`, `top_n`, `benchmarks` |
+| `/valuation/*` | Various | DCF, DDM valuations | Various |
+| `/fundamental/*` | Various | Fundamental analysis | Various |
+| `/market/*` | Various | Market data queries | Various |
+| `/signals/*` | Various | Signal queries | Various |
+| `/data/*` | Various | Data management | Various |
 
 ### 5.2 Endpoint Details
 
@@ -1473,26 +1589,6 @@ class Fundamentals(Base):
     metric = Column(String, nullable=False)  # 'revenue', 'ebitda', etc.
     value = Column(Float)
     period = Column(String)  # '12M', 'Q'
-
-class ModelSignals(Base):
-    __tablename__ = "model_signals"
-    
-    id = Column(Integer, primary_key=True)
-    sid = Column(Integer, ForeignKey("securities.sid"))
-    date = Column(Date, nullable=False, index=True)
-    model_name = Column(String, nullable=False)  # 'ranking_v3'
-    score = Column(Float)
-    rank = Column(Integer)
-    metadata_json = Column(String)  # Factor breakdown
-
-class PortfolioTargets(Base):
-    __tablename__ = "portfolio_targets"
-    
-    id = Column(Integer, primary_key=True)
-    sid = Column(Integer, ForeignKey("securities.sid"))
-    date = Column(Date, nullable=False, index=True)
-    model_name = Column(String, nullable=False)  # 'kelly_v1', 'hrp_v1'
-    weight = Column(Float, nullable=False)
 ```
 
 ### 6.2 Parquet Schemas
@@ -1591,10 +1687,6 @@ def setup_logging():
             logging.FileHandler('logs/quant.log')
         ]
     )
-    
-    # Reduce noise from third-party libraries
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
-    logging.getLogger('yfinance').setLevel(logging.WARNING)
 ```
 
 #### 7.3.2 Key Metrics to Monitor
@@ -1623,8 +1715,8 @@ def setup_logging():
 
 ```bash
 # Clone repository
-git clone https://github.com/your-org/alpha_quant.git
-cd alpha_quant/backend
+git clone https://github.com/your-org/dca_quant.git
+cd dca_quant/backend
 
 # Create virtual environment
 python -m venv venv
@@ -1678,6 +1770,7 @@ open http://localhost:8000/docs
 | Integration Tests | `tests/test_api.py` | API endpoint validation |
 | Tier Tests | `tests/test_tier*.py` | Feature tier validation |
 | Backtest Tests | `tests/test_backtest*.py` | Simulation determinism |
+| Stage Tests | `tests/test_stage*.py` | Stage-specific validation |
 
 ### 9.2 Running Tests
 
