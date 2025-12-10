@@ -24,3 +24,26 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Backend data & outputs
+backend/logs/
+backend/mlruns/
+backend/data_lake/
+backend/reports/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Frontend
+*.tsbuildinfo
+.eslintcache
+coverage/
