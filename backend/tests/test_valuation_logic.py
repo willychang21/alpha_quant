@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from app.engines import valuation
 from app.engines.valuation import core
+from app.engines.valuation import utils
 from app.domain import schemas
 
 def test_nvda_valuation_logic(mock_nvda_data):
@@ -61,7 +62,7 @@ def test_wacc_calculation():
     market_cap = 9000
     tax_rate = 0.21
     
-    wacc_res = core.calculate_wacc(
+    wacc_res = utils.calculate_wacc(
         info={
             'beta': beta,
             'marketCap': market_cap,
@@ -69,11 +70,9 @@ def test_wacc_calculation():
         },
         balance=None, # Not needed if totalDebt is in info
         income=None,   # Not needed if we don't check interest expense details here (defaults used)
-        risk_free_rate=risk_free,
-        market_risk_premium=market_return - risk_free # MRP = 0.10 - 0.04 = 0.06
     )
     
-    wacc = wacc_res['wacc']
+    wacc = wacc_res[0]  # calculate_wacc returns tuple (wacc, beta, rf, mrp, tax_rate)
     
     # Expected:
     # Ke = 0.04 + 1.2 * (0.10 - 0.04) = 0.112 (11.2%)

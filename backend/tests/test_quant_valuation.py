@@ -32,18 +32,18 @@ def test_dcf_valuation():
         'Interest Expense': [-2000000],
         'Tax Provision': [5000000],
         'Pretax Income': [25000000]
-    }, index=[pd.Timestamp.now()])
+    }, index=[pd.Timestamp.now()]).T
     
     balance = pd.DataFrame({
         'Total Debt': [50000000],
         'Cash And Cash Equivalents': [10000000]
-    }, index=[pd.Timestamp.now()])
+    }, index=[pd.Timestamp.now()]).T
     
     cashflow = pd.DataFrame({
         'Total Cash From Operating Activities': [25000000],
         'Capital Expenditure': [-5000000],
         'Free Cash Flow': [20000000]
-    }, index=[pd.Timestamp.now()])
+    }, index=[pd.Timestamp.now()]).T
     
     data = {
         'info': info,
@@ -78,8 +78,9 @@ def test_reit_valuation():
     
     income = pd.DataFrame({
         'Net Income': [5000000],
-        'Depreciation And Amortization': [10000000]
-    }, index=[pd.Timestamp.now()])
+        'Depreciation And Amortization': [10000000],
+        'Reconciled Depreciation': [10000000]
+    }, index=[pd.Timestamp.now()]).T
     
     data = {
         'info': info,

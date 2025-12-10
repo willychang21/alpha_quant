@@ -24,7 +24,7 @@ from app.domain import schemas
 logging.basicConfig(level=logging.WARNING, format='%(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def test_stock(ticker: str, expected_model: str = None):
+def _test_stock(ticker: str, expected_model: str = None):
     """Test single stock and validate results."""
     print(f"\n{'='*70}")
     print(f"Testing: {ticker}")
@@ -174,7 +174,7 @@ def run_comprehensive_test():
             current += 1
             print(f"\n[{current}/{total_tests}]", end=" ")
             
-            result = test_stock(ticker)
+            result = _test_stock(ticker)
             
             if result:
                 results.append(result)
