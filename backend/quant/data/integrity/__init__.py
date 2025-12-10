@@ -11,7 +11,8 @@ Key features:
 - Smart catch-up for gap detection and backfill
 """
 
-from quant.data.integrity.catchup import SmartCatchUpService
+from quant.data.integrity.calendar import MarketCalendar
+from quant.data.integrity.catchup import CatchUpResult, SmartCatchUpService
 from quant.data.integrity.enums import (
     Action,
     InterpolationMethod,
@@ -49,6 +50,8 @@ __all__ = [
     "ActionProcessor",
     # CatchUp
     "SmartCatchUpService",
+    "CatchUpResult",
+    "MarketCalendar",
     # Schema
     "OHLCVSchema",
     "SCHEMA_VERSION",
@@ -59,5 +62,3 @@ __all__ = [
     "DataValidator",
     "OHLCVValidator",
 ]
-
-
