@@ -13,6 +13,7 @@ Key features:
 
 from quant.data.integrity.calendar import MarketCalendar
 from quant.data.integrity.catchup import CatchUpResult, SmartCatchUpService
+from quant.data.integrity.fetcher import YFinanceFetcher
 from quant.data.integrity.enums import (
     Action,
     InterpolationMethod,
@@ -52,6 +53,7 @@ __all__ = [
     "SmartCatchUpService",
     "CatchUpResult",
     "MarketCalendar",
+    "YFinanceFetcher",
     # Schema
     "OHLCVSchema",
     "SCHEMA_VERSION",

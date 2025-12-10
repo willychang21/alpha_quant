@@ -9,12 +9,61 @@ from fastapi import APIRouter, HTTPException, Query
 from quant.data.signal_store import get_signal_store
 from quant.data.data_provider import create_data_provider
 from quant.backtest.engine import BacktestEngine
+from app.core.startup import startup_service
 from datetime import date, timedelta
 import logging
 import json
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+@router.get("/data-status")
+def get_data_status():
+    """
+    Get data lake status and catch-up result.
+    
+    Returns information about:
+    - Last catch-up operation result
+    - Data lake health
+    """
+    try:
+        from quant.data.integrity import SmartCatchUpService, MarketCalendar
+        from quant.data.parquet_io import ParquetReader, get_data_lake_path
+        
+        # Get catch-up result from startup
+        catchup_result = startup_service.get_catchup_result()
+        
+        # Get current data status
+        reader = ParquetReader(str(get_data_lake_path()))
+        df = reader.read_prices(columns=['date', 'ticker'])
+        
+        if df.empty:
+            data_status = {
+                "has_data": False,
+                "last_date": None,
+                "ticker_count": 0
+            }
+        else:
+            data_status = {
+                "has_data": True,
+                "last_date": str(df['date'].max()),
+                "first_date": str(df['date'].min()),
+                "ticker_count": df['ticker'].nunique(),
+                "total_rows": len(df)
+            }
+        
+        return {
+            "data_status": data_status,
+            "catchup_result": catchup_result
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting data status: {e}")
+        return {
+            "data_status": {"error": str(e)},
+            "catchup_result": startup_service.get_catchup_result()
+        }
 
 
 @router.get("/rankings")

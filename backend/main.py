@@ -1,19 +1,48 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_router
 from app.api.v1.endpoints import quant
 from app.core.database import init_db
 from app.core.logging_config import setup_logging
+from app.core.startup import startup_service
 import logging
 
 # Configure Logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="DCA Valuation Engine", version="1.0.0")
 
-# Initialize Database
-init_db()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Application lifespan manager.
+    
+    Startup:
+    - Initialize database
+    - Run Smart Catch-Up Service to backfill missing data
+    
+    Shutdown:
+    - Cleanup resources
+    """
+    # Startup
+    logger.info("🚀 Starting DCA Valuation Engine...")
+    init_db()
+    await startup_service.run_startup_tasks()
+    logger.info("✅ Server ready to accept requests")
+    
+    yield
+    
+    # Shutdown
+    logger.info("👋 Shutting down...")
+
+
+app = FastAPI(
+    title="DCA Valuation Engine", 
+    version="1.0.0",
+    lifespan=lifespan
+)
 
 # CORS Configuration
 origins = [
