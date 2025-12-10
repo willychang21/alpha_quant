@@ -13,9 +13,12 @@ redis
 cvxpy
 scikit-learn
 pytest
+hypothesis
 xgboost
 shap
 deap
 mlflow
 ray[default]
 websockets
+pandera>=0.18.0
+pandas_market_calendars

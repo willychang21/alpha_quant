@@ -301,6 +301,16 @@ backend/
 │   │   ├── ingestion.py             # Data ingestion utilities
 │   │   ├── models.py                # SQLAlchemy models (Security, MarketData)
 │   │   ├── versioning.py            # Data versioning
+│   │   ├── integrity/               # Data Integrity & Validation Framework
+│   │   │   ├── __init__.py          # Module exports
+│   │   │   ├── enums.py             # ValidationContext, Action enums
+│   │   │   ├── schema.py            # OHLCVSchema (Pandera)
+│   │   │   ├── validator.py         # OHLCVValidator
+│   │   │   ├── processor.py         # ActionProcessor
+│   │   │   ├── catchup.py           # SmartCatchUpService
+│   │   │   ├── models.py            # ValidationReport, ValidationIssue
+│   │   │   ├── policy.py            # ActionPolicy configuration
+│   │   │   └── exceptions.py        # Custom exception hierarchy
 │   │   └── realtime/                # Real-time streaming
 │   │       ├── interface.py         # StreamClient abstract base
 │   │       ├── connection_manager.py # WebSocket management
@@ -460,6 +470,7 @@ backend/
 │   │   ├── factors/                 # Computed factors
 │   │   ├── signals/                 # Ranking signals
 │   │   └── targets/                 # Portfolio targets
+│   ├── validation_logs/             # Validation reports (JSON)
 │   ├── experiments/                 # Backtest runs with lineage
 │   └── snapshots/                   # Data snapshots
 │
@@ -571,6 +582,56 @@ data_lake/processed/
 └── targets/
     └── kelly_v1_2024-12-05.parquet
 ```
+
+#### 4.1.4 Data Integrity & Validation Framework
+
+The `integrity` module provides a robust validation layer for market data, ensuring data quality before storage. Built with Pandera for declarative schema validation.
+
+**Key Features:**
+- **Context-aware validation**: DAILY (real-time) vs BACKFILL (historical) modes
+- **Pandera schema**: OHLCVSchema with strict type checking and OHLCV relationship validation
+- **Smart catch-up**: Automatic gap detection and backfill on startup
+- **Configurable actions**: DROP, INTERPOLATE, FFILL, WARN policies
+
+```python
+# quant/data/integrity/
+
+from quant.data.integrity import (
+    OHLCVValidator,
+    ValidationContext,
+    ActionProcessor,
+    SmartCatchUpService,
+)
+
+# Validate incoming data
+validator = OHLCVValidator()
+report = validator.validate(df, context=ValidationContext.DAILY, lazy=True)
+
+# Apply configured actions
+processor = ActionProcessor()
+clean_df = processor.apply_actions(df, report)
+
+# Check drop rate threshold
+if report.drop_rate > 0.10:
+    logger.warning(f"High drop rate: {report.drop_rate:.1%}")
+```
+
+**Validation Pipeline:**
+
+| Stage | Checks | Action on Failure |
+|-------|--------|-------------------|
+| Structural | Required columns, types | DROP |
+| Logical | High≥Low, prices>0, volume>0 | DROP |
+| Temporal | Missing business days | INTERPOLATE/WARN |
+| Statistical | Outliers (>5σ), spikes (>50%) | Context-dependent |
+
+**Spike Detection by Context:**
+
+| Context | Classification | Action |
+|---------|---------------|--------|
+| DAILY | `potential_spike` (unverified) | WARN |
+| BACKFILL | `confirmed_spike` (reverted) | DROP |
+| BACKFILL | `persistent_move` (no reversion) | WARN |
 
 ---
 

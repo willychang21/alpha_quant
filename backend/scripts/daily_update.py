@@ -15,6 +15,7 @@ Usage:
 
 Features:
 - Incremental update (only fetches missing days)
+- Data validation via Data Integrity Framework
 - Dual write to SQLite + Parquet
 - Automatic retry with exponential backoff
 - Email/Slack notification on failure (configurable)
@@ -27,6 +28,7 @@ from datetime import datetime, date, timedelta
 import argparse
 import logging
 import time
+import json
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -58,20 +60,28 @@ class DailyUpdateService:
     - Market prices (OHLCV)
     - Fundamentals (quarterly updates)
     - Parquet data lake storage
+    - Data validation via Data Integrity Framework (Requirement 6.1)
     """
     
     def __init__(
         self,
         update_parquet: bool = True,
-        max_retries: int = 3
+        max_retries: int = 3,
+        enable_validation: bool = True,
+        drop_rate_threshold: float = 0.10  # 10% default (Requirement 6.3)
     ):
         self.update_parquet = update_parquet
         self.max_retries = max_retries
+        self.enable_validation = enable_validation
+        self.drop_rate_threshold = drop_rate_threshold
         
         # Stats
         self.stats = {
             'tickers_updated': 0,
             'rows_added': 0,
+            'rows_validated': 0,
+            'rows_dropped': 0,
+            'validation_warnings': 0,
             'errors': [],
             'start_time': datetime.now()
         }
@@ -81,6 +91,23 @@ class DailyUpdateService:
             from quant.data.parquet_io import ParquetWriter, get_data_lake_path
             self.parquet_writer = ParquetWriter(str(get_data_lake_path()))
             self.data_lake_path = get_data_lake_path()
+        
+        # Initialize validation framework (Requirements 6.1, 6.2)
+        if enable_validation:
+            try:
+                from quant.data.integrity import (
+                    OHLCVValidator,
+                    ActionProcessor,
+                    ActionPolicy,
+                    ValidationContext,
+                )
+                self.validator = OHLCVValidator()
+                self.processor = ActionProcessor()
+                self.ValidationContext = ValidationContext
+                logger.info("Data validation framework initialized")
+            except ImportError as e:
+                logger.warning(f"Validation framework not available: {e}")
+                self.enable_validation = False
     
     def get_universe(self) -> list:
         """Get list of tickers to update."""
@@ -164,10 +191,93 @@ class DailyUpdateService:
                 else:
                     raise
     
+    def _validate_data(self, df: pd.DataFrame, ticker: str) -> pd.DataFrame:
+        """
+        Validate data using the Data Integrity Framework.
+        
+        Requirements: 6.1, 6.2, 6.3
+        
+        Args:
+            df: DataFrame with OHLCV data
+            ticker: Ticker symbol for logging
+        
+        Returns:
+            Clean DataFrame after validation and action application
+        """
+        if not self.enable_validation or df.empty:
+            return df
+        
+        # Validate with DAILY context (Requirement 6.1)
+        report = self.validator.validate(
+            df,
+            context=self.ValidationContext.DAILY,
+            lazy=True
+        )
+        
+        # Log validation summary (Requirement 6.2)
+        self.stats['rows_validated'] += report.rows_input
+        self.stats['rows_dropped'] += report.rows_dropped
+        self.stats['validation_warnings'] += report.rows_warned
+        
+        if report.structural_issues or report.logical_issues:
+            logger.warning(
+                f"Validation issues for {ticker}: "
+                f"{len(report.structural_issues)} structural, "
+                f"{len(report.logical_issues)} logical"
+            )
+        
+        # Check drop rate threshold (Requirement 6.3)
+        if report.drop_rate > self.drop_rate_threshold:
+            logger.error(
+                f"Drop rate {report.drop_rate:.1%} exceeds threshold "
+                f"{self.drop_rate_threshold:.1%} for {ticker}"
+            )
+            self.stats['errors'].append(
+                f"{ticker}: Drop rate {report.drop_rate:.1%} exceeds threshold"
+            )
+        
+        # Log potential spikes
+        if report.potential_spikes:
+            for spike in report.potential_spikes:
+                logger.warning(f"Potential spike detected: {spike}")
+        
+        # Apply actions and return clean data
+        clean_df = self.processor.apply_actions(df, report)
+        
+        # Persist validation report (Requirement 6.4)
+        self._persist_validation_report(report, ticker)
+        
+        return clean_df
+    
+    def _persist_validation_report(self, report, ticker: str):
+        """
+        Persist validation report to data lake for audit.
+        
+        Requirement: 6.4
+        """
+        if not self.update_parquet:
+            return
+        
+        try:
+            validation_logs_path = self.data_lake_path / 'validation_logs'
+            validation_logs_path.mkdir(parents=True, exist_ok=True)
+            
+            # Create log file path
+            log_file = validation_logs_path / f"{date.today().isoformat()}_{ticker}.json"
+            
+            # Write report as JSON
+            with open(log_file, 'w') as f:
+                f.write(report.to_json())
+                
+        except Exception as e:
+            logger.warning(f"Could not persist validation report for {ticker}: {e}")
+    
     def update_prices(self, days_back: int = 5):
         """Update price data."""
         logger.info("=" * 50)
         logger.info("Starting price update...")
+        if self.enable_validation:
+            logger.info("Data validation: ENABLED")
         
         tickers = self.get_universe()
         
@@ -231,14 +341,26 @@ class DailyUpdateService:
                         if not records:
                             continue
                         
+                        # Convert to DataFrame for validation
+                        records_df = pd.DataFrame(records)
+                        
+                        # Validate data (Requirement 6.1)
+                        if self.enable_validation:
+                            records_df = self._validate_data(records_df, ticker)
+                        
+                        if records_df.empty:
+                            logger.warning(f"All data dropped for {ticker} after validation")
+                            continue
+                        
                         # Write to Parquet
                         if self.update_parquet:
-                            self._write_parquet_prices(records)
+                            self._write_parquet_prices(records_df.to_dict('records'))
                         
                         self.stats['tickers_updated'] += 1
-                        self.stats['rows_added'] += len(records)
+                        self.stats['rows_added'] += len(records_df)
                         
                     except Exception as e:
+                        # Ticker isolation on failure (Requirement 6.5)
                         logger.error(f"Error processing {ticker}: {e}")
                         self.stats['errors'].append(f"{ticker}: {e}")
                 
@@ -262,6 +384,15 @@ class DailyUpdateService:
         logger.info(f"Tickers updated: {self.stats['tickers_updated']}")
         logger.info(f"Rows added: {self.stats['rows_added']}")
         
+        # Validation stats
+        if self.enable_validation:
+            logger.info(f"Rows validated: {self.stats['rows_validated']}")
+            logger.info(f"Rows dropped: {self.stats['rows_dropped']}")
+            logger.info(f"Validation warnings: {self.stats['validation_warnings']}")
+            if self.stats['rows_validated'] > 0:
+                drop_rate = self.stats['rows_dropped'] / self.stats['rows_validated']
+                logger.info(f"Overall drop rate: {drop_rate:.2%}")
+        
         if self.stats['errors']:
             logger.warning(f"Errors: {len(self.stats['errors'])}")
             for e in self.stats['errors'][:5]:
@@ -278,9 +409,16 @@ def main():
     parser = argparse.ArgumentParser(description='Daily data update to Parquet')
     parser.add_argument('--days-back', type=int, default=5,
                         help='Days of data to fetch (default: 5)')
+    parser.add_argument('--no-validation', action='store_true',
+                        help='Disable data validation')
+    parser.add_argument('--drop-threshold', type=float, default=0.10,
+                        help='Drop rate threshold for alerts (default: 0.10)')
     args = parser.parse_args()
     
-    service = DailyUpdateService()
+    service = DailyUpdateService(
+        enable_validation=not args.no_validation,
+        drop_rate_threshold=args.drop_threshold
+    )
     
     try:
         service.update_prices(days_back=args.days_back)
@@ -293,4 +431,5 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
+
 

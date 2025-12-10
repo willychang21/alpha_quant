@@ -26,11 +26,12 @@ dist-ssr
 *.sw?
 
 # Python
-venv/
+.venv/
 __pycache__/
 *.py[cod]
 *.pyo
 .pytest_cache/
+.hypothesis/
 
 # Backend data & outputs
 backend/logs/
@@ -47,3 +48,6 @@ backend/reports/
 *.tsbuildinfo
 .eslintcache
 coverage/
+
+# ai
+.kiro/
