@@ -327,15 +327,10 @@ class StartupService:
         """Get the result of the last catch-up operation."""
         return self._catchup_result
 
-
-# Global instance - FAANG-style: all initialization enabled by default
-import os
-enable_signals_env = os.getenv("ENABLE_SIGNALS", "false").lower() == "true"
-
 startup_service = StartupService(
     enable_catchup=True,
     enable_seeding=True,
-    enable_signals=enable_signals_env,
+    enable_signals=True,
     max_gap_days=30,
     signal_staleness_days=0
 )
