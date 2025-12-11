@@ -4,6 +4,7 @@ from quant.data.data_provider import DataProvider, SQLiteDataProvider, create_da
 from quant.selection.ranking import RankingEngine
 from quant.portfolio.optimizer import PortfolioOptimizer
 from quant.backtest.execution.slippage import SlippageModel, FixedSlippage, VolumeShareSlippage
+from quant.backtest.execution.fill_model import FillModel, LiquidityConstrainedFill
 from datetime import date, timedelta
 from typing import Optional, Union
 import pandas as pd
@@ -34,6 +35,7 @@ class BacktestEngine:
         data_provider: DataProvider = None,
         initial_capital: float = 100000.0,
         slippage_model: SlippageModel = None,
+        fill_model: FillModel = None,
         commission_rate: float = 0.0  # e.g. 0.0005 for 5bps
     ):
         # Support both old and new interface
@@ -62,9 +64,11 @@ class BacktestEngine:
         self.holdings = {}  # ticker -> quantity
         
         self.slippage_model = slippage_model if slippage_model else FixedSlippage(spread_bps=10)
+        self.fill_model = fill_model if fill_model else LiquidityConstrainedFill(max_participation=0.1)
         self.commission_rate = commission_rate
         
         self.history = []
+        self.unfilled_orders = {}  # ticker -> remaining quantity
 
 
     def run_backtest(self, start_date: date, end_date: date, rebalance_freq_days: int = 30):
@@ -155,8 +159,23 @@ class BacktestEngine:
             return
 
         # Apply Slippage
-        # We need volume/volatility for advanced models, passing None for now (FixedSlippage ignores them)
         exec_price = self.slippage_model.calculate_price(price, quantity)
+        
+        # Apply Fill Model (check volume constraint)
+        # Note: We don't have volume data in this basic engine, so fill_model
+        # will use default behavior. In production, pass actual volume.
+        filled_qty = self.fill_model.get_fill_quantity(quantity, volume=None)
+        remaining_qty = quantity - filled_qty
+        
+        # Track unfilled portion
+        if remaining_qty != 0:
+            current_unfilled = self.unfilled_orders.get(ticker, 0)
+            self.unfilled_orders[ticker] = current_unfilled + remaining_qty
+        
+        # Use filled quantity for actual execution
+        quantity = filled_qty
+        if quantity == 0:
+            return
         
         trade_value = abs(quantity * exec_price)
         commission = trade_value * self.commission_rate

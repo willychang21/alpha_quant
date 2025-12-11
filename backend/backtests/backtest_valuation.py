@@ -204,7 +204,8 @@ def run_backtest(ticker: str, periods: int = 8) -> pd.DataFrame:
             stock = yf.Ticker(ticker)
             hist_start = date - timedelta(days=365)
             history = stock.history(start=hist_start, end=date)
-        except:
+        except Exception as e:
+            logger.debug(f"Could not fetch history for {ticker}: {e}")
             history = pd.DataFrame()
         
         # Run valuation model

@@ -35,6 +35,43 @@ logger = logging.getLogger(__name__)
 logging.getLogger("yfinance").setLevel(logging.WARNING)
 logging.getLogger("valuation").setLevel(logging.INFO) # Enable INFO logs for debugging
 
+# Import historical beta calculator
+from quant.backtest.beta import calculate_historical_beta, get_market_returns
+
+
+def _calculate_historical_beta_for_pit(ticker: str, hist: pd.DataFrame, backtest_date) -> float:
+    """Calculate historical beta using only data available before backtest_date.
+    
+    Args:
+        ticker: Stock ticker
+        hist: Price history DataFrame up to backtest_date
+        backtest_date: The point-in-time date
+    
+    Returns:
+        Historical beta, default 1.0 if calculation fails
+    """
+    try:
+        if hist.empty or len(hist) < 60:
+            return 1.0
+        
+        # Get stock returns from available history
+        stock_returns = hist['Close'].pct_change().dropna()
+        
+        # Get market returns for the same period
+        start_date = hist.index[0]
+        if hasattr(start_date, 'tz_localize'):
+            start_date = pd.Timestamp(start_date).tz_localize(None)
+        end_date = pd.Timestamp(backtest_date).tz_localize(None) if isinstance(backtest_date, str) else backtest_date
+        
+        market_returns = get_market_returns(start_date, end_date)
+        if market_returns is None:
+            return 1.0
+        
+        return calculate_historical_beta(stock_returns, market_returns)
+    except Exception as e:
+        logger.debug(f"{ticker}: Could not calculate historical beta: {e}")
+        return 1.0
+
 def get_point_in_time_data(ticker: str, backtest_date_str: str):
     """
     Reconstructs the state of the world as of backtest_date.
@@ -72,8 +109,8 @@ def get_point_in_time_data(ticker: str, backtest_date_str: str):
                 col_date = pd.to_datetime(col).tz_localize(None)
                 if col_date < backtest_date:
                     valid_cols.append(col)
-            except:
-                pass # Ignore non-date columns if any
+            except (TypeError, ValueError) as e:
+                logger.debug(f"Skipping non-date column: {col}, error: {e}")
         
         return df[valid_cols]
 
@@ -98,7 +135,8 @@ def get_point_in_time_data(ticker: str, backtest_date_str: str):
         else:
             # Fallback to current if history missing (minor leakage, usually stable)
             shares_outstanding = stock.info.get('sharesOutstanding')
-    except:
+    except (TypeError, KeyError, AttributeError) as e:
+        logger.debug(f"{ticker}: Could not get shares from balance sheet: {e}")
         shares_outstanding = stock.info.get('sharesOutstanding')
 
     market_cap = historical_price * shares_outstanding if shares_outstanding else 0
@@ -110,10 +148,6 @@ def get_point_in_time_data(ticker: str, backtest_date_str: str):
     
     try:
         if income is not None and not income.empty:
-            # Debug columns
-            if ticker == 'NVDA':
-                print(f"[DEBUG] Income Columns: {income.columns.tolist()}")
-                
             if len(income.columns) >= 5:
                 # Sort columns by date descending (just in case)
                 sorted_cols = sorted(income.columns, key=lambda x: pd.to_datetime(x), reverse=True)
@@ -135,27 +169,13 @@ def get_point_in_time_data(ticker: str, backtest_date_str: str):
                 
                 if ni_latest and ni_ago and abs(ni_ago) > 0:
                     earnings_growth = (ni_latest - ni_ago) / abs(ni_ago)
-                
-                if ticker == 'NVDA':
-                    # FORCE CORRECT HISTORICAL GROWTH FOR VALIDATION
-                    # Real historical growth was >100%
-                    revenue_growth = 1.0 
-                    earnings_growth = 1.0
-                    print(f"[DEBUG] Calc Growth: Rev={revenue_growth:.1%}, Earn={earnings_growth:.1%}")
                     
                 # Cap extreme growth for stability
                 # earnings_growth = max(-0.5, min(earnings_growth, 0.5)) # REMOVED CAP FOR DEBUG
                 # revenue_growth = max(-0.2, min(revenue_growth, 0.3))
             
-    except Exception as e:
+    except (TypeError, ValueError, KeyError) as e:
         logger.warning(f"{ticker}: Could not calculate historical growth: {e}")
-
-    if ticker == 'NVDA':
-        # FORCE CORRECT HISTORICAL GROWTH FOR VALIDATION
-        # Real historical growth was >100%
-        revenue_growth = 1.0 
-        earnings_growth = 1.0
-        print(f"[DEBUG] Force Growth: Rev={revenue_growth:.1%}, Earn={earnings_growth:.1%}")
 
     # Mock Info Object
     # We populate only what valuation.py needs, using historical values where possible
@@ -166,7 +186,8 @@ def get_point_in_time_data(ticker: str, backtest_date_str: str):
         'sharesOutstanding': shares_outstanding or 0,
         'sector': stock.info.get('sector', 'Unknown'), # Sector doesn't change
         'industry': stock.info.get('industry', 'Unknown'),
-        'beta': stock.info.get('beta', 1.0), # Use current beta (acceptable approx)
+        # Use historical beta to avoid look-ahead bias
+        'beta': _calculate_historical_beta_for_pit(ticker, hist, backtest_date),
         'dividendRate': stock.info.get('dividendRate', 0.0), # Approx
         'dividendYield': stock.info.get('dividendYield', 0.0), # Approx
         # We don't have historical analyst estimates, so we disable those features or use simple growth
@@ -207,7 +228,8 @@ def run_time_machine_test(tickers, backtest_date="2025-01-01"):
     for t in tickers:
         try:
             current_prices[t] = yf.Ticker(t).history(period="1d")['Close'].iloc[-1]
-        except:
+        except (KeyError, IndexError, ValueError) as e:
+            logger.debug(f"Could not get current price for {t}: {e}")
             current_prices[t] = 0
 
     for ticker in tickers:
