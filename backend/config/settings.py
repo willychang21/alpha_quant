@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     job_retry_base_delay: float = 4.0
     job_retry_max_delay: float = 60.0
     
+    # Data Freshness (Phase 3)
+    data_freshness_threshold_hours: float = 24.0
+    
+    # Circuit Breaker (Phase 3)
+    circuit_breaker_failure_threshold: int = 5
+    circuit_breaker_recovery_timeout: float = 60.0
+    
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

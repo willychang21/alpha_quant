@@ -2,14 +2,18 @@
 
 Provides a simple wrapper around yfinance that conforms to the
 DataFetcherProtocol expected by SmartCatchUpService.
+
+Includes circuit breaker protection for API resilience.
 """
 
 import logging
 from datetime import date
-from typing import List
+from typing import List, Optional
 
 import pandas as pd
 import yfinance as yf
+
+from core.circuit_breaker import CircuitBreaker, CircuitOpenError, get_yfinance_circuit_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -22,16 +26,30 @@ class YFinanceFetcher:
     format expected by the validation framework.
     """
     
-    def __init__(self, threads: bool = True, progress: bool = False):
+    def __init__(
+        self, 
+        threads: bool = True, 
+        progress: bool = False,
+        circuit_breaker: Optional[CircuitBreaker] = None
+    ):
         """
         Initialize the fetcher.
         
         Args:
             threads: Use multi-threading for faster downloads
             progress: Show download progress bar
+            circuit_breaker: Optional circuit breaker (uses default if None)
         """
         self.threads = threads
         self.progress = progress
+        self._circuit_breaker = circuit_breaker
+    
+    @property
+    def circuit_breaker(self) -> CircuitBreaker:
+        """Get circuit breaker, using default if not set."""
+        if self._circuit_breaker is None:
+            self._circuit_breaker = get_yfinance_circuit_breaker()
+        return self._circuit_breaker
     
     def fetch_range(
         self, 
@@ -42,6 +60,8 @@ class YFinanceFetcher:
         """
         Fetch historical OHLCV data for tickers in date range.
         
+        Uses circuit breaker to handle yfinance API failures gracefully.
+        
         Args:
             tickers: List of ticker symbols
             start: Start date (inclusive)
@@ -49,11 +69,28 @@ class YFinanceFetcher:
             
         Returns:
             DataFrame with columns: ticker, date, open, high, low, close, adj_close, volume
+            
+        Raises:
+            CircuitOpenError: If circuit breaker is open
         """
         logger.info(f"Fetching {len(tickers)} tickers from {start} to {end}")
         
-        # Download from yfinance
-        data = yf.download(
+        # Use circuit breaker to protect yfinance call
+        data = self.circuit_breaker.call(
+            self._download_from_yfinance,
+            tickers, start, end
+        )
+        
+        return self._process_yfinance_response(data, tickers)
+    
+    def _download_from_yfinance(
+        self,
+        tickers: List[str],
+        start: date,
+        end: date
+    ) -> pd.DataFrame:
+        """Raw yfinance download (wrapped by circuit breaker)."""
+        return yf.download(
             tickers,
             start=start.isoformat(),
             end=end.isoformat(),
@@ -61,7 +98,13 @@ class YFinanceFetcher:
             progress=self.progress,
             threads=self.threads
         )
-        
+    
+    def _process_yfinance_response(
+        self,
+        data: pd.DataFrame,
+        tickers: List[str]
+    ) -> pd.DataFrame:
+        """Process yfinance response into standard format."""
         if data.empty:
             logger.warning("No data returned from yfinance")
             return pd.DataFrame()

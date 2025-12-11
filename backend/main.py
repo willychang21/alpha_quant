@@ -53,7 +53,9 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager.
     
     Startup:
+    - Apply pending database migrations
     - Initialize database
+    - Check data freshness
     - Run Smart Catch-Up Service to backfill missing data
     
     Shutdown:
@@ -62,7 +64,25 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     logger.info("[START] Starting DCA Valuation Engine...")
+    
+    # Phase 3: Run migrations first
+    try:
+        from app.core.migrations import run_migrations
+        run_migrations()
+    except Exception as e:
+        logger.error(f"[START] Migration failed: {e}")
+        raise
+    
     init_db()
+    
+    # Phase 3: Check data freshness
+    try:
+        from core.freshness import get_data_freshness_service
+        freshness_service = get_data_freshness_service()
+        freshness_service.check_and_log()
+    except Exception as e:
+        logger.warning(f"[START] Freshness check failed: {e}")
+    
     await startup_service.run_startup_tasks()
     logger.info("[READY] Server ready to accept requests")
     

@@ -116,11 +116,13 @@ async def deep_health(db: Session = Depends(get_db)):
     Checks:
     - Database connectivity
     - Data lake path exists
+    - Data freshness status
     
     Returns:
         JSON with status ("healthy" or "degraded") and check details
     """
     from config.settings import get_settings
+    from core.freshness import get_data_freshness_service
     
     settings = get_settings()
     checks = {}
@@ -139,12 +141,29 @@ async def deep_health(db: Session = Depends(get_db)):
     else:
         checks["data_lake"] = "unhealthy: path not found"
     
-    # Determine overall status
-    all_healthy = all(v == "healthy" for v in checks.values())
+    # Data freshness check
+    freshness_service = get_data_freshness_service()
+    is_fresh, lag_hours, last_date = freshness_service.get_freshness_status()
+    
+    data_freshness_hours = lag_hours if lag_hours != float('inf') else None
+    data_last_date = str(last_date) if last_date else None
+    
+    if is_fresh:
+        checks["data_freshness"] = "healthy"
+    else:
+        checks["data_freshness"] = f"stale: {lag_hours:.1f}h lag" if lag_hours != float('inf') else "unhealthy: no data"
+    
+    # Determine overall status (freshness warning doesn't make system degraded)
+    core_healthy = all(
+        v == "healthy" for k, v in checks.items() 
+        if k in ("database", "data_lake")
+    )
     
     return {
-        "status": "healthy" if all_healthy else "degraded",
+        "status": "healthy" if core_healthy else "degraded",
         "checks": checks,
+        "data_freshness_hours": data_freshness_hours,
+        "data_last_date": data_last_date,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 

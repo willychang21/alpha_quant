@@ -89,17 +89,20 @@ class MonitoringService:
             self.record_failure(job_name, str(e), duration)
             raise
     
-    def check_data_freshness(self, ticker: str) -> bool:
-        """Check if data for a ticker is fresh (updated today).
+    def check_data_freshness(self, ticker: str = None) -> bool:
+        """Check if data is fresh (within threshold).
         
         Args:
-            ticker: Stock ticker to check
+            ticker: Stock ticker (optional, for future per-ticker checks)
             
         Returns:
             True if data is fresh
         """
-        # Logic to check MarketDataDaily max date
-        return True
+        from core.freshness import get_data_freshness_service
+        
+        freshness_service = get_data_freshness_service()
+        is_fresh, _, _ = freshness_service.get_freshness_status()
+        return is_fresh
 
 
 # Singleton instance
