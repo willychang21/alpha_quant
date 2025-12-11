@@ -189,24 +189,26 @@ class SmartCatchUpService:
         try:
             # Get last date in data lake
             last_date = self._get_max_date()
-            today = date.today()
+            # Only catch up to yesterday (completed trading days)
+            # Today's data should be handled by real-time stream
+            target_date = date.today() - timedelta(days=1)
             
             # Handle empty data lake case (Requirement 5.4)
             if last_date is None:
                 logger.warning("No existing data found in data lake - performing initial load")
-                backfill_start = today - timedelta(days=self.initial_lookback_days)
-                gap_days = self.calendar.count_trading_days(backfill_start, today)
+                backfill_start = target_date - timedelta(days=self.initial_lookback_days)
+                gap_days = self.calendar.count_trading_days(backfill_start, target_date)
                 
                 result = self._perform_backfill(
                     start=backfill_start,
-                    end=today,
+                    end=target_date,
                     tickers=tickers
                 )
                 self._last_result = result
                 return result.ready, gap_days
             
             # Calculate business day gap
-            gap_days = self._calculate_business_day_gap(last_date, today)
+            gap_days = self._calculate_business_day_gap(last_date, target_date)
             
             logger.info(f"Data lake last date: {last_date}, gap: {gap_days} business days")
             
@@ -228,14 +230,14 @@ class SmartCatchUpService:
                     "Manual intervention may be required."
                 )
                 # Still attempt backfill but cap at max_gap_days
-                backfill_start = today - timedelta(days=max_gap_days * 2)
+                backfill_start = target_date - timedelta(days=max_gap_days * 2)
             else:
                 backfill_start = last_date + timedelta(days=1)
             
             # Perform backfill
             result = self._perform_backfill(
                 start=backfill_start,
-                end=today,
+                end=target_date,
                 tickers=tickers
             )
             result.days_backfilled = gap_days
@@ -549,7 +551,7 @@ class SmartCatchUpService:
             Dict with gap information
         """
         last_date = self._get_max_date()
-        today = date.today()
+        target_date = date.today() - timedelta(days=1)
         
         if last_date is None:
             return {
@@ -560,12 +562,12 @@ class SmartCatchUpService:
                 "message": "Data lake is empty, initial load required"
             }
         
-        gap_days = self._calculate_business_day_gap(last_date, today)
+        gap_days = self._calculate_business_day_gap(last_date, target_date)
         
         return {
             "has_data": True,
             "last_date": str(last_date),
-            "today": str(today),
+            "today": str(date.today()),
             "gap_days": gap_days,
             "needs_backfill": gap_days > 0
         }

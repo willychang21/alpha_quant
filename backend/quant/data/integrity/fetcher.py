@@ -95,6 +95,7 @@ class YFinanceFetcher:
             start=start.isoformat(),
             end=end.isoformat(),
             group_by='ticker',
+            auto_adjust=True,
             progress=self.progress,
             threads=self.threads
         )
