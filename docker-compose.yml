@@ -1,74 +1,96 @@
 version: '3.8'
 
 services:
-  # Valuation Service
-  valuation-service:
+  # =============================================================================
+  # Main API Service (Single service for personal use)
+  # =============================================================================
+  api:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: uvicorn services.valuation.main:app --host 0.0.0.0 --port 8001 --reload
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - ./backend:/app
+      - sqlite_data:/app/data
+      - data_lake:/app/data_lake
+      - mlruns:/app/mlruns
     ports:
-      - "8001:8001"
+      - "8000:8000"
     environment:
       - PYTHONPATH=/app
-      - DATABASE_URL=postgresql://user:password@db:5432/quant_db
-    depends_on:
-      - db
-      - redis
+      - DATABASE_URL=sqlite:///./data/database.sqlite
+      - DATA_LAKE_PATH=./data_lake
+      - MLFLOW_TRACKING_URI=./mlruns
+      - CORS_ORIGINS=["http://localhost:5173","http://localhost:3000","http://localhost:8080"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
 
-  # Portfolio Service
-  portfolio-service:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    command: uvicorn services.portfolio.main:app --host 0.0.0.0 --port 8002 --reload
-    volumes:
-      - ./backend:/app
-    ports:
-      - "8002:8002"
-    environment:
-      - PYTHONPATH=/app
-      - DATABASE_URL=postgresql://user:password@db:5432/quant_db
-    depends_on:
-      - db
-      - redis
-
-  # Data Service (Streaming)
-  data-service:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    command: uvicorn services.data.main:app --host 0.0.0.0 --port 8003 --reload
-    volumes:
-      - ./backend:/app
-    ports:
-      - "8003:8003"
-    environment:
-      - PYTHONPATH=/app
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      - redis
-
-  # Infrastructure
-  db:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: quant_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
+  # =============================================================================
+  # Redis (for job queue - optional for personal use)
+  # =============================================================================
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
 
-  # API Gateway
+  # =============================================================================
+  # Compute Worker (background job processing)
+  # =============================================================================
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: python -m compute.worker
+    volumes:
+      - ./backend:/app
+      - sqlite_data:/app/data
+      - data_lake:/app/data_lake
+      - mlruns:/app/mlruns
+    environment:
+      - PYTHONPATH=/app
+      - DATABASE_URL=sqlite:///./data/database.sqlite
+      - DATA_LAKE_PATH=./data_lake
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # =============================================================================
+  # Frontend (React/Vite)
+  # =============================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - api
+    profiles:
+      - with-frontend
+
+  # =============================================================================
+  # API Gateway (Nginx - optional for production-like setup)
+  # =============================================================================
   gateway:
     image: nginx:alpine
     volumes:
@@ -76,9 +98,17 @@ services:
     ports:
       - "8080:80"
     depends_on:
-      - valuation-service
-      - portfolio-service
-      - data-service
+      - api
+    profiles:
+      - with-gateway
+    restart: unless-stopped
 
 volumes:
-  postgres_data:
+  sqlite_data:
+    driver: local
+  data_lake:
+    driver: local
+  mlruns:
+    driver: local
+  redis_data:
+    driver: local
