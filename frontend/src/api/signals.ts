@@ -1,6 +1,4 @@
-import axios from 'axios';
-
-const API_URL = 'http://localhost:8000/api/v1';
+import api from './axios';
 
 export interface Signal {
     id: number;
@@ -12,16 +10,11 @@ export interface Signal {
     metadata_json: string;
 }
 
-export const getSignals = async (filters: {
-    ticker?: string;
-    model_name?: string;
-    limit?: number;
-} = {}) => {
+export const getLatestSignals = async (model_name: string = 'ranking_v3', limit: number = 1000) => {
     const params = new URLSearchParams();
-    if (filters.ticker) params.append('ticker', filters.ticker);
-    if (filters.model_name) params.append('model_name', filters.model_name);
-    if (filters.limit) params.append('limit', filters.limit.toString());
-
-    const response = await axios.get<Signal[]>(`${API_URL}/signals/?${params.toString()}`);
-    return response.data;
+    params.append('model_name', model_name);
+    params.append('limit', limit.toString());
+    
+    const response = await api.get<{ signals: Signal[], date: string, model: string }>(`/signals/latest?${params.toString()}`);
+    return response.data.signals;
 };

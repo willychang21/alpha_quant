@@ -49,9 +49,6 @@ class SignalStore:
         # Create directories
         self.signals_path.mkdir(parents=True, exist_ok=True)
         self.targets_path.mkdir(parents=True, exist_ok=True)
-        
-        # DuckDB connection for queries
-        self._conn = duckdb.connect(':memory:')
     
     # =========================================================================
     # Signal Operations
@@ -146,11 +143,12 @@ class SignalStore:
         latest_file = files[0]
         
         # Read with DuckDB
-        df = self._conn.execute(f"""
-            SELECT * FROM read_parquet('{latest_file}')
-            ORDER BY rank ASC
-            LIMIT {limit}
-        """).df()
+        with duckdb.connect(':memory:') as conn:
+            df = conn.execute(f"""
+                SELECT * FROM read_parquet('{latest_file}')
+                ORDER BY rank ASC
+                LIMIT {limit}
+            """).df()
         
         return df
     
@@ -218,7 +216,8 @@ class SignalStore:
             LIMIT {limit}
         """
         
-        return self._conn.execute(query).df()
+        with duckdb.connect(':memory:') as conn:
+            return conn.execute(query).df()
     
     # =========================================================================
     # Portfolio Target Operations
@@ -289,11 +288,12 @@ class SignalStore:
         files.sort(key=lambda f: f.stem.split('_')[-1], reverse=True)
         latest_file = files[0]
         
-        return self._conn.execute(f"""
-            SELECT ticker, weight, date 
-            FROM read_parquet('{latest_file}')
-            ORDER BY weight DESC
-        """).df()
+        with duckdb.connect(':memory:') as conn:
+            return conn.execute(f"""
+                SELECT ticker, weight, date 
+                FROM read_parquet('{latest_file}')
+                ORDER BY weight DESC
+            """).df()
     
     def get_targets_history(
         self,
@@ -326,10 +326,12 @@ class SignalStore:
         
         file_list = ", ".join([f"'{f}'" for f in filtered_files])
         
-        return self._conn.execute(f"""
-            SELECT * FROM read_parquet([{file_list}])
-            ORDER BY date DESC, weight DESC
-        """).df()
+        
+        with duckdb.connect(':memory:') as conn:
+            return conn.execute(f"""
+                SELECT * FROM read_parquet([{file_list}])
+                ORDER BY date DESC, weight DESC
+            """).df()
     
     # =========================================================================
     # Utility Methods

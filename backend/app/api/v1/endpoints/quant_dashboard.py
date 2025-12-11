@@ -47,43 +47,37 @@ def get_risk_metrics(
 ):
     """
     Returns current risk metrics (VaR, Hedge Cost) based on the latest Optimized Portfolio.
+    Now uses Parquet SignalStore for portfolio targets.
     """
     try:
-        from app.core.database import SessionLocal
-        from quant.data.models import PortfolioTargets, Security
+        from quant.data.signal_store import get_signal_store
         
-        db = SessionLocal()
+        store = get_signal_store()
         
-        # 1. Fetch Latest Portfolio Targets
-        latest_date = db.query(PortfolioTargets.date).order_by(PortfolioTargets.date.desc()).first()
+        # 1. Fetch Latest Portfolio Targets from Parquet
+        # Try different optimizer models
+        targets_df = None
+        for model in ['kelly_v1', 'mvo_v1', 'hrp_v1']:
+            targets_df = store.get_latest_targets(model_name=model)
+            if not targets_df.empty:
+                break
         
-        if not latest_date:
+        if targets_df is None or targets_df.empty:
             # Fallback to dummy if no portfolio exists
             weights = np.array([0.6, 0.4]) 
             tickers = ["DUMMY_A", "DUMMY_B"]
             cov_matrix = np.array([[0.04, 0.01], [0.01, 0.01]])
         else:
-            targets = db.query(PortfolioTargets).filter(PortfolioTargets.date == latest_date[0]).all()
-            if not targets:
-                 weights = np.array([0.6, 0.4])
-                 tickers = ["DUMMY_A", "DUMMY_B"]
-                 cov_matrix = np.array([[0.04, 0.01], [0.01, 0.01]])
-            else:
-                # Construct weights array
-                weights = np.array([t.weight for t in targets])
-                tickers = [t.security.ticker for t in targets]
-                
-                # Fetch Real Covariance (Simplified: Fetch 1y history for these tickers)
-                # For speed, we might just use a proxy or cached cov. 
-                # Here we will simulate a cov matrix based on the number of assets to keep it fast for the dashboard
-                # In production, this should be cached.
-                n = len(weights)
-                # Create a synthetic correlation matrix (0.5 correlation)
-                corr = np.full((n, n), 0.5)
-                np.fill_diagonal(corr, 1.0)
-                # Assume 20% vol for all
-                vols = np.full(n, 0.20)
-                cov_matrix = np.outer(vols, vols) * corr
+            # Construct weights array from Parquet data
+            weights = targets_df['weight'].values
+            tickers = targets_df['ticker'].tolist()
+            
+            # Simulate a cov matrix based on the number of assets
+            n = len(weights)
+            corr = np.full((n, n), 0.5)
+            np.fill_diagonal(corr, 1.0)
+            vols = np.full(n, 0.20)
+            cov_matrix = np.outer(vols, vols) * corr
 
         # Normalize weights just in case
         if weights.sum() > 0:
@@ -100,8 +94,6 @@ def get_risk_metrics(
             spot_price=400, # Dummy SPY
             volatility=volatility
         )
-        
-        db.close()
         
         return {
             "var": {
@@ -140,37 +132,36 @@ def get_vwap_schedule(
 @router.get("/weekly/trades", response_model=List[Dict[str, Any]])
 def get_weekly_trades():
     """
-    Returns the latest weekly trade list.
+    Returns the latest weekly trade list from Parquet SignalStore.
     """
     try:
-        from app.core.database import SessionLocal
-        from quant.reporting.trade_list import TradeListGenerator
-        from quant.data.models import PortfolioTargets
+        from quant.data.signal_store import get_signal_store
         
-        db = SessionLocal()
+        store = get_signal_store()
         
-        # Find latest date with targets (Try Kelly first, then MVO)
-        latest_rec = db.query(PortfolioTargets.date, PortfolioTargets.model_name)\
-            .filter(PortfolioTargets.model_name.in_(['kelly_v1', 'mvo_v1']))\
-            .order_by(PortfolioTargets.date.desc())\
-            .first()
-            
-        if not latest_rec:
-            db.close()
+        # Find latest targets from Parquet
+        targets_df = None
+        model_name = None
+        for model in ['kelly_v1', 'mvo_v1', 'hrp_v1']:
+            targets_df = store.get_latest_targets(model_name=model)
+            if not targets_df.empty:
+                model_name = model
+                break
+        
+        if targets_df is None or targets_df.empty:
             return []
-            
-        target_date = latest_rec.date
-        model_name = latest_rec.model_name
-            
-        generator = TradeListGenerator(db)
-        df = generator.generate_trade_list(target_date, model_name=model_name)
-        db.close()
         
-        if df.empty:
-            return []
-            
-        # Convert to dict
-        return df.to_dict(orient="records")
+        # Convert to trade list format
+        trades = []
+        for _, row in targets_df.iterrows():
+            trades.append({
+                'Ticker': row['ticker'],
+                'Weight': float(row['weight']),
+                'Action': 'BUY' if row['weight'] > 0 else 'HOLD',
+                'Model': model_name
+            })
+        
+        return trades
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -179,14 +170,13 @@ def get_dashboard_summary():
     """
     Aggregated endpoint for Quant Command Center 2.0.
     Returns: Regime, Attribution, and Trades in a single payload.
+    Now uses Parquet SignalStore.
     """
     try:
-        from app.core.database import SessionLocal
-        from quant.data.models import PortfolioTargets, ModelSignals
-        from quant.reporting.trade_list import TradeListGenerator
+        from quant.data.signal_store import get_signal_store
         import json
         
-        db = SessionLocal()
+        store = get_signal_store()
         
         # ========== 1. REGIME ==========
         registry = ModelRegistry(experiment_name="test_genetic_algo")
@@ -218,13 +208,7 @@ def get_dashboard_summary():
             "adjusted_target_vol": round(adjusted_target_vol, 4)
         }
         
-        # ========== 2. ATTRIBUTION (Factor Exposures) ==========
-        # Fetch latest ModelSignals to get factor scores for the portfolio
-        latest_target = db.query(PortfolioTargets)\
-            .filter(PortfolioTargets.model_name.in_(['kelly_v1', 'mvo_v1']))\
-            .order_by(PortfolioTargets.date.desc())\
-            .first()
-        
+        # ========== 2. ATTRIBUTION (Factor Exposures) from Parquet ==========
         attribution = {
             "value": 0.0,
             "momentum": 0.0,
@@ -233,108 +217,93 @@ def get_dashboard_summary():
             "sentiment": 0.0
         }
         
-        if latest_target:
-            target_date = latest_target.date
-            targets = db.query(PortfolioTargets)\
-                .filter(PortfolioTargets.date == target_date)\
-                .filter(PortfolioTargets.model_name.in_(['kelly_v1', 'mvo_v1']))\
-                .all()
-            
-            # Get corresponding signals
-            sids = [t.sid for t in targets]
-            weights = {t.sid: t.weight for t in targets}
-            
-            signals = db.query(ModelSignals)\
-                .filter(ModelSignals.date == target_date)\
-                .filter(ModelSignals.model_name == 'ranking_v3')\
-                .filter(ModelSignals.sid.in_(sids))\
-                .all()
-            
-            # Fallback to v2
-            if not signals:
-                signals = db.query(ModelSignals)\
-                    .filter(ModelSignals.date == target_date)\
-                    .filter(ModelSignals.model_name == 'ranking_v2')\
-                    .filter(ModelSignals.sid.in_(sids))\
-                    .all()
-            
-            # Weight-average the factor scores
+        # Get latest targets from Parquet
+        targets_df = None
+        for model in ['kelly_v1', 'mvo_v1']:
+            targets_df = store.get_latest_targets(model_name=model)
+            if not targets_df.empty:
+                break
+        
+        # Get latest signals from Parquet
+        signals_df = store.get_latest_signals(model_name='ranking_v3', limit=500)
+        if signals_df.empty:
+            signals_df = store.get_latest_signals(model_name='ranking_v2', limit=500)
+        
+        if targets_df is not None and not targets_df.empty and not signals_df.empty:
+            # Build ticker -> weight mapping
+            weights = dict(zip(targets_df['ticker'], targets_df['weight']))
             total_weight = sum(weights.values())
-            if signals and total_weight > 0:
-                value_sum = momentum_sum = quality_sum = low_risk_sum = sentiment_sum = 0.0
+            
+            # Calculate weighted attribution
+            value_sum = momentum_sum = quality_sum = low_risk_sum = sentiment_sum = 0.0
+            
+            for _, sig in signals_df.iterrows():
+                ticker = sig['ticker']
+                if ticker not in weights:
+                    continue
+                    
+                w = weights[ticker] / total_weight if total_weight > 0 else 0
                 
-                for sig in signals:
-                    w = weights.get(sig.sid, 0.0) / total_weight
-                    try:
-                        meta = json.loads(sig.metadata_json) if sig.metadata_json else {}
-                        # Use actual keys from metadata
-                        value_sum += w * meta.get('upside', meta.get('valuation_composite', 0.0))
-                        momentum_sum += w * meta.get('vsm', 0.0)
-                        quality_sum += w * meta.get('qmj', meta.get('roe', 0.0))
-                        low_risk_sum += w * meta.get('bab', 0.0)
-                        sentiment_sum += w * meta.get('revisions', meta.get('sentiment', 0.0))
-                    except:
-                        pass
-                
-                attribution = {
-                    "value": round(value_sum, 2),
-                    "momentum": round(momentum_sum, 2),
-                    "quality": round(quality_sum, 2),
-                    "low_risk": round(low_risk_sum, 2),
-                    "sentiment": round(sentiment_sum, 2)
-                }
+                try:
+                    meta = {}
+                    if 'metadata_json' in sig and sig['metadata_json']:
+                        meta = json.loads(sig['metadata_json']) if isinstance(sig['metadata_json'], str) else sig['metadata_json']
+                    
+                    value_sum += w * meta.get('upside', meta.get('valuation_composite', 0.0))
+                    momentum_sum += w * meta.get('vsm', 0.0)
+                    quality_sum += w * meta.get('qmj', meta.get('roe', 0.0))
+                    low_risk_sum += w * meta.get('bab', 0.0)
+                    sentiment_sum += w * meta.get('revisions', meta.get('sentiment', 0.0))
+                except:
+                    pass
+            
+            attribution = {
+                "value": round(value_sum, 2),
+                "momentum": round(momentum_sum, 2),
+                "quality": round(quality_sum, 2),
+                "low_risk": round(low_risk_sum, 2),
+                "sentiment": round(sentiment_sum, 2)
+            }
         
-        # ========== 3. TRADES ==========
+        # ========== 3. TRADES from Parquet ==========
         trades = []
-        if latest_target:
-            target_date = latest_target.date
-            generator = TradeListGenerator(db)
-            df = generator.generate_trade_list(target_date, model_name='kelly_v1')
+        if targets_df is not None and not targets_df.empty:
+            # Build ticker -> signal score map
+            ticker_to_score = {}
+            if not signals_df.empty:
+                ticker_to_score = dict(zip(signals_df['ticker'], signals_df['score']))
             
-            if df.empty:
-                df = generator.generate_trade_list(target_date, model_name='mvo_v1')
-            
-            if not df.empty:
-                # Build ticker -> signal score map first
-                from quant.data.models import Security
-                ticker_to_score = {}
-                for sig in signals:
-                    ticker = sig.security.ticker if sig.security else None
-                    if ticker:
-                        ticker_to_score[ticker] = sig.score
+            # Build trades from targets
+            for _, row in targets_df.iterrows():
+                ticker = row['ticker']
+                weight = row['weight']
+                alpha_score = ticker_to_score.get(ticker, 0.0)
                 
-                # Add alpha score and reason
-                for _, row in df.iterrows():
-                    ticker = row['Ticker']
-                    alpha_score = ticker_to_score.get(ticker, 0.0)
-                    
-                    # Determine conviction level
-                    if alpha_score >= 2.0:
-                        conviction = "High"
-                    elif alpha_score >= 1.0:
-                        conviction = "Medium"
-                    else:
-                        conviction = "Low"
-                    
-                    # Reason for sizing
-                    reason = "Standard Sizing"
-                    if confidence_multiplier < 1.0:
-                        reason = f"Vol Target Reduced ({int((1-confidence_multiplier)*100)}%)"
-                    
-                    trades.append({
-                        "ticker": row['Ticker'],
-                        "name": row.get('Name', row['Ticker']),
-                        "sector": row.get('Sector', 'Unknown'),
-                        "alpha_score": round(alpha_score, 2),
-                        "conviction": conviction,
-                        "raw_weight": round(row['Weight'] / confidence_multiplier, 4) if confidence_multiplier > 0 else row['Weight'],
-                        "final_weight": round(row['Weight'], 4),
-                        "shares": row.get('Shares', 0),
-                        "value": round(row.get('Value', 0), 2),
-                        "reason": reason
-                    })
-        
-        db.close()
+                # Determine conviction level
+                if alpha_score >= 2.0:
+                    conviction = "High"
+                elif alpha_score >= 1.0:
+                    conviction = "Medium"
+                else:
+                    conviction = "Low"
+                
+                # Reason for sizing
+                reason = "Standard Sizing"
+                if confidence_multiplier < 1.0:
+                    reason = f"Vol Target Reduced ({int((1-confidence_multiplier)*100)}%)"
+                
+                trades.append({
+                    "ticker": ticker,
+                    "name": ticker,
+                    "sector": "Unknown",
+                    "alpha_score": round(alpha_score, 2),
+                    "conviction": conviction,
+                    "raw_weight": round(weight / confidence_multiplier, 4) if confidence_multiplier > 0 else weight,
+                    "final_weight": round(weight, 4),
+                    "shares": 0,
+                    "value": 0,
+                    "reason": reason
+                })
         
         return {
             "regime": regime,
@@ -356,39 +325,34 @@ def run_backtest(
 ):
     """
     Run walk-forward backtest and return equity curves with benchmark comparison.
+    Now uses Parquet data lake for price data.
     """
     try:
-        from app.core.database import SessionLocal
-        from quant.data.models import Security, MarketDataDaily
+        from quant.data.parquet_io import ParquetReader, get_data_lake_path
         from quant.backtest.factor_engine import (
             PointInTimeFactorEngine,
             run_factor_backtest,
             calculate_performance_metrics
         )
         import yfinance as yf
+        from datetime import date
         
-        db = SessionLocal()
+        # 1. Load price data from Parquet data lake
+        reader = ParquetReader(str(get_data_lake_path()))
         
-        # 1. Load price data
-        data_start = f"{start_year - 1}-01-01"
-        data_end = f"{end_year}-12-31"
+        start_date = date(start_year - 1, 1, 1)
+        end_date = date(end_year, 12, 31)
         
-        query = db.query(
-            MarketDataDaily.date,
-            Security.ticker,
-            MarketDataDaily.close
-        ).join(Security, Security.sid == MarketDataDaily.sid)\
-         .filter(MarketDataDaily.date >= data_start)\
-         .filter(MarketDataDaily.date <= data_end)\
-         .filter(MarketDataDaily.close.isnot(None))
+        prices_df = reader.read_prices(
+            start_date=start_date,
+            end_date=end_date,
+            columns=['date', 'ticker', 'close']
+        )
         
-        data = query.all()
+        if prices_df.empty:
+            return {"error": "No price data available in data lake. Run startup_catch_up.py first."}
         
-        if not data:
-            db.close()
-            return {"error": "No price data available. Run download_history.py first."}
-        
-        prices_df = pd.DataFrame(data, columns=['date', 'ticker', 'close'])
+        # Convert date column to datetime for backtest engine
         prices_df['date'] = pd.to_datetime(prices_df['date'])
         
         # 2. Run backtest
@@ -401,7 +365,6 @@ def run_backtest(
         equity_curve = run_factor_backtest(prices_df, rebalance_dates, top_n=top_n)
         
         if equity_curve.empty:
-            db.close()
             return {"error": "Backtest failed - insufficient data"}
         
         # 3. Get benchmark data
@@ -503,8 +466,6 @@ def run_backtest(
         
         # 11. Subperiod Analysis (yearly breakdown)
         subperiod = calculate_subperiod_analysis(equity_curve)
-        
-        db.close()
         
         return {
             "strategy": {

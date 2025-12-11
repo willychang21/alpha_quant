@@ -7,7 +7,7 @@ Includes circuit breaker protection for API resilience.
 """
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import List, Optional
 
 import pandas as pd
@@ -90,10 +90,13 @@ class YFinanceFetcher:
         end: date
     ) -> pd.DataFrame:
         """Raw yfinance download (wrapped by circuit breaker)."""
+        # yfinance end date is exclusive, so add 1 day to include the end date
+        yfinance_end = end + timedelta(days=1)
+        
         return yf.download(
             tickers,
             start=start.isoformat(),
-            end=end.isoformat(),
+            end=yfinance_end.isoformat(),
             group_by='ticker',
             auto_adjust=True,
             progress=self.progress,
@@ -113,28 +116,38 @@ class YFinanceFetcher:
         # Convert to long format with our expected columns
         records = []
         
-        # Handle single ticker vs multi-ticker response
-        if len(tickers) == 1:
-            ticker = tickers[0]
-            df = data.reset_index()
-            for _, row in df.iterrows():
-                if pd.isna(row.get('Close')):
-                    continue
-                records.append(self._row_to_record(row, ticker))
-        else:
-            # Multi-ticker: data has MultiIndex columns
-            for ticker in tickers:
-                try:
+        # Determine if we have a MultiIndex (Ticker -> Price Field)
+        is_multi_index = isinstance(data.columns, pd.MultiIndex)
+        
+        for ticker in tickers:
+            try:
+                # Extract data for this ticker
+                if is_multi_index:
                     if ticker not in data.columns.get_level_values(0):
                         continue
-                    ticker_df = data[ticker].reset_index()
-                    for _, row in ticker_df.iterrows():
-                        if pd.isna(row.get('Close')):
-                            continue
-                        records.append(self._row_to_record(row, ticker))
-                except Exception as e:
-                    logger.warning(f"Error processing {ticker}: {e}")
+                    ticker_data = data[ticker]
+                elif len(tickers) == 1:
+                    # Single ticker, flat DataFrame
+                    ticker_data = data
+                else:
+                    # Should not happen if yfinance respects group_by='ticker'
                     continue
+                
+                # Reset index to get Date as a column
+                ticker_df = ticker_data.reset_index()
+                
+                for _, row in ticker_df.iterrows():
+                    # Check for valid price data
+                    # Note: yfinance auto_adjust=True usage means 'Close' is already adjusted
+                    close_val = row.get('Close')
+                    if pd.isna(close_val):
+                        continue
+                        
+                    records.append(self._row_to_record(row, ticker))
+                    
+            except Exception as e:
+                logger.warning(f"Error processing {ticker}: {e}")
+                continue
         
         if not records:
             return pd.DataFrame()

@@ -69,7 +69,7 @@ def get_data_status():
 @router.get("/rankings")
 def get_rankings(
     model: str = Query(default=None, description="Model name (ranking_v3, ranking_v2)"),
-    limit: int = Query(default=100, le=500, description="Max results")
+    limit: int = Query(default=100, le=2000, description="Max results")
 ):
     """
     Get latest stock rankings from RankingEngine.

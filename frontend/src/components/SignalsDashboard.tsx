@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { getSignals, Signal } from '../api/signals';
+import { getLatestSignals, Signal } from '../api/signals';
 import { motion } from 'framer-motion';
 
 const SignalsDashboard: React.FC = () => {
@@ -22,7 +22,8 @@ const SignalsDashboard: React.FC = () => {
     useEffect(() => {
         const fetchSignals = async () => {
             try {
-                const data = await getSignals({ limit: 1000 }); // Fetch all for client-side sorting
+                // Use getLatestSignals to prevent duplicates from historical data
+                const data = await getLatestSignals('ranking_v3', 1000); 
                 setSignals(data);
             } catch (error) {
                 console.error("Failed to fetch signals:", error);
@@ -168,7 +169,7 @@ const SignalsDashboard: React.FC = () => {
                                                 const sentimentIcon = sentiment > 0.1 ? '🟢' : sentiment < -0.1 ? '🔴' : '🟡';
                                                 
                                                 return (
-                                                    <TableRow key={signal.id} className="hover:bg-muted/50 transition-colors">
+                                                    <TableRow key={`${signal.ticker}-${signal.model_name}`} className="hover:bg-muted/50 transition-colors">
                                                         <TableCell className="font-medium">{signal.ticker}</TableCell>
                                                         <TableCell>
                                                             <Badge variant="outline" className="font-normal">

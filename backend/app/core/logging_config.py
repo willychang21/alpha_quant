@@ -64,7 +64,7 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_entry)
 
 
-def setup_logging(json_format: bool = True):
+def setup_logging(json_format: bool = False):
     """Configure centralized logging with optional JSON format.
     
     Args:
@@ -100,6 +100,18 @@ def setup_logging(json_format: bool = True):
     
     console_handler.setFormatter(formatter)
     file_handler.setFormatter(formatter)
+    
+
+    # Create Filter to inject request_id if missing
+    class RequestIdFilter(logging.Filter):
+        def filter(self, record):
+            if not hasattr(record, 'request_id'):
+                record.request_id = request_id_var.get()
+            return True
+
+    request_id_filter = RequestIdFilter()
+    console_handler.addFilter(request_id_filter)
+    file_handler.addFilter(request_id_filter)
     
     # Configure root logger
     logging.basicConfig(level=logging.INFO, handlers=[console_handler, file_handler])

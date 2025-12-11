@@ -18,7 +18,7 @@ class Holding(HoldingBase):
     portfolio_id: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class PortfolioBase(BaseModel):
     name: str
@@ -33,7 +33,7 @@ class Portfolio(PortfolioBase):
     holdings: List[Holding] = []
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # Config Schemas (for the specific JSON structure used by frontend)
 class ETFConfig(BaseModel):

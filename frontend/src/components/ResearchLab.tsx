@@ -4,7 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { getSignals, Signal } from '../api/signals';
+import { getLatestSignals, Signal } from '../api/signals';
 import { motion } from 'framer-motion';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { FlaskConical, Filter, TrendingUp, ChevronDown, ChevronUp } from 'lucide-react';
@@ -65,7 +65,8 @@ const ResearchLab: React.FC = () => {
     useEffect(() => {
         const fetchSignals = async () => {
             try {
-                const data = await getSignals({ limit: 1000 });
+                // Use getLatestSignals to prevent duplicates from historical data
+                const data = await getLatestSignals('ranking_v3', 1000);
                 setSignals(data);
             } catch (error) {
                 console.error("Failed to fetch signals:", error);

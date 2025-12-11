@@ -65,25 +65,30 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("[START] Starting DCA Valuation Engine...")
     
-    # Phase 3: Run migrations first
-    try:
-        from app.core.migrations import run_migrations
-        run_migrations()
-    except Exception as e:
-        logger.error(f"[START] Migration failed: {e}")
-        raise
+    # Phase 3: Run migrations first (Moved to launch script/manual to prevent hang)
+    # try:
+    #     from app.core.migrations import run_migrations
+    #     run_migrations()
+    # except Exception as e:
+    #     logger.error(f"[START] Migration failed: {e}")
+    #     raise
     
+    logger.info("[START] Initializing database...")
     init_db()
+    logger.info("[START] Database initialized.")
     
     # Phase 3: Check data freshness
     try:
+        logger.info("[START] Checking data freshness...")
         from core.freshness import get_data_freshness_service
         freshness_service = get_data_freshness_service()
         freshness_service.check_and_log()
+        logger.info("[START] Data freshness check complete.")
     except Exception as e:
         logger.warning(f"[START] Freshness check failed: {e}")
     
-    await startup_service.run_startup_tasks()
+    # await startup_service.run_startup_tasks()
+    logger.info("[START] pure backend mode, no scheduler")
     logger.info("[READY] Server ready to accept requests")
     
     yield
@@ -126,7 +131,6 @@ app.add_middleware(
 
 # Include API Router
 app.include_router(api_router, prefix="/api/v1")
-app.include_router(quant.router, prefix="/api/v1/quant", tags=["quant"])
 app.include_router(health_endpoints.router, prefix="/api/v1", tags=["health"])
 
 

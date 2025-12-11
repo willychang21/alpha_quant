@@ -8,6 +8,7 @@ Requirements: 1.1, 1.2, 2.1, 2.2, 2.3, 2.4, 3.1, 4.1, 5.1, 5.2
 """
 
 import logging
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -462,9 +463,11 @@ class SmartCatchUpService:
         
         # Process tickers with isolation (Requirement 3.1)
         if 'ticker' in df.columns:
+            from tqdm import tqdm
             unique_tickers = df['ticker'].unique()
             
-            for ticker in unique_tickers:
+            # Using tqdm for processing progress
+            for ticker in tqdm(unique_tickers, desc="Processing tickers", file=sys.stdout):
                 try:
                     ticker_df = df[df['ticker'] == ticker].copy()
                     

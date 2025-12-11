@@ -35,7 +35,7 @@ def get_signals(
     model_name: Optional[str] = Query(default=None, description="Filter by model"),
     start_date: Optional[date] = Query(default=None, description="Start date"),
     end_date: Optional[date] = Query(default=None, description="End date"),
-    limit: int = Query(default=100, le=500, description="Max results")
+    limit: int = Query(default=100, le=2000, description="Max results")
 ):
     """
     Retrieve signals with optional filtering.
@@ -89,7 +89,7 @@ def get_signals(
 @router.get("/latest")
 def get_latest_signals(
     model_name: str = Query(default="ranking_v3", description="Model name"),
-    limit: int = Query(default=50, le=200, description="Max results")
+    limit: int = Query(default=50, le=5000, description="Max results")
 ):
     """
     Get the most recent signals for a model.

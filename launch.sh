@@ -55,6 +55,10 @@ cleanup() {
         kill $FRONTEND_PID 2>/dev/null || true
     fi
     
+    if [ ! -z "$SCHEDULER_PID" ]; then
+        kill $SCHEDULER_PID 2>/dev/null || true
+    fi
+    
     # Reset trap to default to avoid infinite loop if called again
     trap - SIGINT SIGTERM EXIT
     exit 0
@@ -130,15 +134,40 @@ start_backend() {
         pip install -r requirements.txt | grep -v "Requirement already satisfied" || true
     fi
     
-    # Using 'fastapi dev' if available, else uvicorn
-    if command -v fastapi &> /dev/null; then
-        fastapi dev main.py --port 8000 &
-    else
-        uvicorn main:app --reload --port 8000 &
-    fi
+    # Parse arguments
+    UPDATE_SIGNALS="false"
+    for arg in "$@"; do
+        case $arg in
+            signal=true|signal=True|SIGNAL=TRUE)
+                UPDATE_SIGNALS="true"
+                ;;
+            --update-signals) # Legacy support
+                UPDATE_SIGNALS="true"
+                ;;
+        esac
+    done
+
+    log_info "Signal Generation: $UPDATE_SIGNALS (Use signal=true to enable)"
+    export ENABLE_SIGNALS="$UPDATE_SIGNALS"
+    export PYTHONUNBUFFERED=1
+
+    # Run migrations once before starting server
+    log_info "Running database migrations..."
+    # We use a python one-liner to run the migration function we extracted
+    python -c "from app.core.migrations import run_migrations; run_migrations()" || log_warn "Migrations failed, but continuing..."
+    
+    # Force uvicorn to ensure reload-exclude flags work correctly
+    uvicorn main:app --reload --reload-exclude "data/**" --reload-exclude "data_lake/**" --reload-exclude "logs/**" --reload-exclude "mlruns/**" --reload-exclude "*.sqlite*" --reload-exclude "*.parquet" --port 8000 &
     
     BACKEND_PID=$!
     log_success "Backend started (PID: $BACKEND_PID) at http://localhost:8000"
+    
+    # Start Scheduler/Worker in background
+    log_info "Starting Scheduler/Worker..."
+    python scheduler.py &
+    SCHEDULER_PID=$!
+    log_success "Scheduler started (PID: $SCHEDULER_PID)"
+    
     cd "$PROJECT_ROOT"
 }
 
@@ -162,21 +191,34 @@ main() {
     echo -e "${YELLOW}========================================${NC}"
     echo -e "${YELLOW}   DCA Quant - Launch Control Center    ${NC}"
     echo -e "${YELLOW}========================================${NC}"
+    echo ""
+    echo -e "${BLUE}Startup Pipeline:${NC}"
+    echo -e "  1. Seed securities (S&P 500 + Nasdaq 100)"
+    echo -e "  2. Data lake catch-up (Parquet)"
+    echo -e "  3. Generate signals if stale"
+    echo ""
     
     check_backend
     check_frontend
     
-    start_backend
+    start_backend "$@"
     
-    # Wait a moment for backend to initialize logic
-    sleep 2
+    # Wait for backend to complete initialization pipeline
+    log_info "Waiting for backend initialization (this may take a moment on first run)..."
+    sleep 5
     
     start_frontend
     
     log_success "All services are running. Press Ctrl+C to stop."
+    echo ""
+    echo -e "${GREEN}Dashboard URLs:${NC}"
+    echo -e "  Backend API:  http://localhost:8000"
+    echo -e "  Frontend:     http://localhost:5173"
+    echo -e "  API Docs:     http://localhost:8000/docs"
+    echo ""
     
     # Wait for processes
     wait
 }
 
-main
+main "$@"
