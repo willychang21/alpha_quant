@@ -2,6 +2,7 @@ fastapi
 uvicorn
 yfinance
 pydantic
+pydantic-settings
 sqlalchemy
 pandas
 numpy

@@ -338,10 +338,17 @@ class ParquetReader:
 
 # Convenience functions
 def get_data_lake_path() -> Path:
-    """Get default data lake path."""
-    import os
-    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return Path(base) / 'data_lake'
+    """Get data lake path from settings."""
+    from config.settings import get_settings
+    settings = get_settings()
+    data_lake_path = settings.data_lake_path
+    
+    # If relative path, resolve from backend directory
+    if not Path(data_lake_path).is_absolute():
+        import os
+        base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        return Path(base) / data_lake_path
+    return Path(data_lake_path)
 
 
 def get_writer() -> ParquetWriter:

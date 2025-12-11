@@ -2,14 +2,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-import os
 
-# Use the existing database from the server directory
-# Assuming the backend is run from the root or backend directory, we need to locate it.
-# We'll use an absolute path or relative to the project root.
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'data', 'database.sqlite')
-SQLALCHEMY_DATABASE_URL = f"sqlite:///{DB_PATH}"
-print(f"DEBUG: Using Database at {DB_PATH}")
+from config.settings import get_settings
+
+# Use database URL from settings (supports env var override)
+settings = get_settings()
+SQLALCHEMY_DATABASE_URL = settings.database_url
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, 
