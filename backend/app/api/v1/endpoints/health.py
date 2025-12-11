@@ -107,3 +107,44 @@ def _compute_data_lag() -> float | None:
     except Exception as e:
         logger.warning(f"Could not compute data lag: {e}")
         return None
+
+
+@router.get("/health/deep")
+async def deep_health(db: Session = Depends(get_db)):
+    """Deep health check - validates all system dependencies.
+    
+    Checks:
+    - Database connectivity
+    - Data lake path exists
+    
+    Returns:
+        JSON with status ("healthy" or "degraded") and check details
+    """
+    from config.settings import get_settings
+    
+    settings = get_settings()
+    checks = {}
+    
+    # Database check
+    try:
+        db.execute(text("SELECT 1"))
+        checks["database"] = "healthy"
+    except Exception as e:
+        checks["database"] = f"unhealthy: {str(e)}"
+    
+    # Data lake check
+    data_lake_path = Path(settings.data_lake_path)
+    if data_lake_path.exists():
+        checks["data_lake"] = "healthy"
+    else:
+        checks["data_lake"] = "unhealthy: path not found"
+    
+    # Determine overall status
+    all_healthy = all(v == "healthy" for v in checks.values())
+    
+    return {
+        "status": "healthy" if all_healthy else "degraded",
+        "checks": checks,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+

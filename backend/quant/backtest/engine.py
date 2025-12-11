@@ -36,8 +36,13 @@ class BacktestEngine:
         initial_capital: float = 100000.0,
         slippage_model: SlippageModel = None,
         fill_model: FillModel = None,
-        commission_rate: float = 0.0  # e.g. 0.0005 for 5bps
+        commission_rate: float = 0.0,  # e.g. 0.0005 for 5bps
+        random_seed: int = 42  # For deterministic backtests
     ):
+        # Set random seed for reproducibility
+        self.random_seed = random_seed
+        np.random.seed(random_seed)
+        
         # Support both old and new interface
         if data_provider is not None:
             self.data_provider = data_provider

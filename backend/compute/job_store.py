@@ -17,6 +17,9 @@ from sqlalchemy.orm import Session
 
 from app.core.database import Base, SessionLocal
 from config.settings import get_settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class JobStatus(str, enum.Enum):
@@ -26,12 +29,14 @@ class JobStatus(str, enum.Enum):
     - pending -> running
     - running -> completed
     - running -> failed
+    - running -> dead (if retry_count >= max_retries)
     - failed -> pending (if retry_count < max_retries)
     """
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    DEAD = "dead"  # Permanently failed after max retries
 
 
 class Job(Base):
@@ -158,7 +163,7 @@ class JobStore:
         job_id: str, 
         error: str
     ) -> Optional[Job]:
-        """Mark job as failed.
+        """Mark job as failed or dead (if max retries exceeded).
         
         Args:
             job_id: Job ID
@@ -174,15 +179,29 @@ class JobStore:
         if job.status != JobStatus.RUNNING.value:
             raise ValueError(f"Cannot fail job in {job.status} status")
         
-        job.status = JobStatus.FAILED.value
         job.error = error
         job.retry_count += 1
         job.completed_at = datetime.now(timezone.utc)
+        
+        # Check if max retries exceeded -> mark as DEAD
+        if job.retry_count >= self._settings.job_max_retries:
+            job.status = JobStatus.DEAD.value
+            self._alert_dead_job(job)
+        else:
+            job.status = JobStatus.FAILED.value
         
         self.session.commit()
         self.session.refresh(job)
         
         return job
+    
+    def _alert_dead_job(self, job: Job):
+        """Log alert for permanently failed job (DLQ)."""
+        logger.error(
+            f"[DLQ] Job permanently failed: "
+            f"job_id={job.id}, task_type={job.task_type}, "
+            f"error={job.error}"
+        )
     
     def retry_job(self, job_id: str) -> Optional[Job]:
         """Retry a failed job if under max retries.
@@ -226,6 +245,16 @@ class JobStore:
             Job or None if not found
         """
         return self.session.query(Job).filter(Job.id == job_id).first()
+    
+    def get_dead_jobs(self) -> list:
+        """Query all permanently failed jobs (DLQ).
+        
+        Returns:
+            List of jobs with DEAD status
+        """
+        return self.session.query(Job).filter(
+            Job.status == JobStatus.DEAD.value
+        ).all()
     
     def get_retry_delay(self, retry_count: int) -> float:
         """Calculate retry delay with exponential backoff.

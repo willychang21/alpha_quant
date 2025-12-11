@@ -297,10 +297,6 @@ class PortfolioOptimizer:
                 logger.error(f"Black-Litterman optimization error: {e}")
                 optimizer = 'mvo'
         
-            except Exception as e:
-                logger.error(f"Black-Litterman optimization error: {e}")
-                optimizer = 'mvo'
-        
         if optimizer == 'kelly':
             # Multivariate Kelly Optimization (Tier-2)
             logger.info("🚀 Using Multivariate Kelly Optimizer (Tier-2)")
@@ -374,16 +370,14 @@ class PortfolioOptimizer:
                 
             if w.value is None:
                 logger.error("Optimization failed (unbounded or infeasible).")
-            return
+                return
             
             optimal_weights = w.value
         
         # Clean weights
         optimal_weights[optimal_weights < 0.001] = 0
-        optimal_weights[optimal_weights < 0.001] = 0
         optimal_weights /= np.sum(optimal_weights)
         
-        # --- Tier-2: Volatility Targeting ---
         # --- Tier-2: Volatility Targeting ---
         if target_vol:
             # Phase 9: System Confidence Integration

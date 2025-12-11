@@ -57,7 +57,8 @@ async def lifespan(app: FastAPI):
     - Run Smart Catch-Up Service to backfill missing data
     
     Shutdown:
-    - Cleanup resources
+    - Dispose database connections
+    - Flush pending logs
     """
     # Startup
     logger.info("[START] Starting DCA Valuation Engine...")
@@ -67,8 +68,19 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Shutdown
-    logger.info("[SHUTDOWN] Shutting down...")
+    # Graceful Shutdown
+    logger.info("[SHUTDOWN] Closing database connections...")
+    try:
+        from app.core.database import engine
+        engine.dispose()
+        logger.info("[SHUTDOWN] Database connections closed")
+    except Exception as e:
+        logger.error(f"[SHUTDOWN] Error disposing engine: {e}")
+    
+    logger.info("[SHUTDOWN] Flushing logs...")
+    logging.shutdown()
+    
+    logger.info("[SHUTDOWN] Cleanup complete")
 
 
 # Get settings
