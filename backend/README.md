@@ -49,10 +49,16 @@ A production-ready, institutional-grade quantitative trading platform implementi
       - [4.6.3 Statistical Validation](#463-statistical-validation)
       - [4.6.4 MLflow Model Registry](#464-mlflow-model-registry)
       - [4.6.5 Experiment Store](#465-experiment-store)
+      - [4.6.6 Circuit Breaker Pattern](#466-circuit-breaker-pattern-phase-3)
+      - [4.6.7 Data Freshness Service](#467-data-freshness-service-phase-3)
+      - [4.6.8 Database Migrations (Alembic)](#468-database-migrations-alembic)
+      - [4.6.9 Centralized Configuration](#469-centralized-configuration-pydantic-settings)
+      - [4.6.10 Health Endpoints](#4610-health-endpoints-phase-3)
   - [5. API Reference](#5-api-reference)
     - [5.1 REST Endpoints](#51-rest-endpoints)
       - [Base URL: `/api/v1`](#base-url-apiv1)
     - [5.2 Endpoint Details](#52-endpoint-details)
+      - [GET `/health`](#get-health)
       - [GET `/quant/rankings`](#get-quantrankings)
       - [GET `/quant/risk/metrics`](#get-quantriskmetrics)
       - [GET `/quant/dashboard/summary`](#get-quantdashboardsummary)
@@ -70,6 +76,8 @@ A production-ready, institutional-grade quantitative trading platform implementi
     - [7.3 Monitoring \& Alerting](#73-monitoring--alerting)
       - [7.3.1 Logging Configuration](#731-logging-configuration)
       - [7.3.2 Key Metrics to Monitor](#732-key-metrics-to-monitor)
+      - [7.3.3 Health Endpoints](#733-health-endpoints)
+      - [7.3.4 Data Freshness Alerting](#734-data-freshness-alerting)
   - [8. Development Setup](#8-development-setup)
     - [8.1 Prerequisites](#81-prerequisites)
     - [8.2 Installation](#82-installation)
@@ -109,6 +117,7 @@ The DCA Quant Backend is a **three-tier quantitative trading engine** designed f
 | **Tier-1** | Alpha Generation | Multi-factor model, HMM regime detection, sector neutralization |
 | **Tier-2** | Portfolio Construction | Kelly criterion, volatility targeting, Black-Litterman |
 | **Tier-3** | Production Infrastructure | Ray distributed computing, MLflow tracking, real-time streaming |
+| **Phase-3** | Operational Resilience | Health endpoints, circuit breaker, data freshness, Alembic migrations |
 
 ### 1.2 Key Capabilities
 
@@ -118,6 +127,8 @@ The DCA Quant Backend is a **three-tier quantitative trading engine** designed f
 - **Risk Management**: Component VaR decomposition, tail hedging via OTM puts
 - **Execution**: VWAP scheduling with market impact estimation
 - **MLOps**: Full experiment lineage with MLflow and reproducible backtests
+- **Operational Resilience**: Circuit breaker pattern, data freshness alerting, health endpoints
+- **Database Management**: Alembic migrations with auto-apply on startup
 
 ### 1.3 Technology Stack
 
@@ -128,6 +139,7 @@ The DCA Quant Backend is a **three-tier quantitative trading engine** designed f
 | **Computation** | NumPy, Pandas, SciPy, CVXPY |
 | **ML** | XGBoost, Scikit-learn, SHAP, DEAP |
 | **Infrastructure** | Ray, MLflow, Redis, WebSockets |
+| **Configuration** | Pydantic Settings, Alembic, python-dotenv |
 
 ---
 
@@ -251,7 +263,20 @@ sequenceDiagram
 backend/
 ├── main.py                          # FastAPI application entry point
 ├── requirements.txt                 # Python dependencies
+├── requirements-dev.txt             # Development dependencies
+├── requirements-lock.txt            # Locked dependency versions
 ├── Dockerfile                       # Container definition
+├── alembic.ini                      # Alembic configuration
+│
+├── alembic/                         # Database Migrations (Phase 3)
+│   ├── env.py                       # Alembic environment config
+│   ├── script.py.mako               # Migration template
+│   └── versions/                    # Migration scripts
+│       └── ed5174599a01_initial.py  # Initial schema migration
+│
+├── config/                          # Centralized Configuration
+│   ├── __init__.py                  # Module exports
+│   └── settings.py                  # Pydantic Settings (env vars + defaults)
 │
 ├── app/                             # API Application Layer
 │   ├── api/v1/                      # REST API v1
@@ -263,11 +288,14 @@ backend/
 │   │       ├── signals.py           # Signal queries
 │   │       ├── portfolios.py        # Portfolio management
 │   │       ├── market.py            # Market data queries
+│   │       ├── health.py            # Health & readiness endpoints (Phase 3)
 │   │       └── data.py              # Data management
 │   │
 │   ├── core/                        # Application core
 │   │   ├── database.py              # SQLAlchemy session management
-│   │   └── logging_config.py        # Structured logging setup
+│   │   ├── logging_config.py        # Structured logging setup
+│   │   ├── startup.py               # Startup hooks & Smart Catch-Up
+│   │   └── migrations.py            # Alembic migration runner
 │   │
 │   ├── data/                        # Data providers
 │   │   └── providers/               # Data provider implementations
@@ -287,6 +315,17 @@ backend/
 │       ├── portfolio_service.py     # Portfolio management
 │       ├── valuation_service.py     # Valuation orchestration
 │       └── valuation.py             # Valuation utilities
+│
+├── core/                            # Shared Infrastructure (Phase 3)
+│   ├── adapters/                    # External API adapters
+│   │   ├── base.py                  # Adapter interface
+│   │   └── yfinance_provider.py     # YFinance data provider
+│   ├── data/
+│   │   └── websocket.py             # WebSocket client
+│   ├── circuit_breaker.py           # Circuit breaker pattern for API resilience
+│   ├── freshness.py                 # Data freshness alerting service
+│   ├── metrics.py                   # JSONL metrics persistence
+│   └── monitoring.py                # Job monitoring with metric tracking
 │
 ├── quant/                           # Quantitative Core Engine
 │   ├── data/                        # Data access layer
@@ -454,8 +493,12 @@ backend/
 │   ├── conftest.py                  # Pytest fixtures
 │   ├── test_api.py                  # API integration tests
 │   ├── test_backtest*.py            # Backtest tests
+│   ├── test_health_endpoints.py     # Health endpoint tests (Phase 3)
+│   ├── test_infrastructure*.py      # Infrastructure tests (Phase 1-3)
+│   ├── test_smart_catchup.py        # Smart Catch-Up service tests
 │   ├── test_tier2_*.py              # Tier-2 feature tests
 │   ├── test_tier3_*.py              # Tier-3 feature tests
+│   ├── test_validation_*.py         # Data validation tests
 │   ├── test_walk_forward.py         # CV validation tests
 │   └── test_*.py                    # Other unit tests
 │
@@ -1487,6 +1530,291 @@ class ExperimentStore:
         return run_id
 ```
 
+#### 4.6.6 Circuit Breaker Pattern (Phase 3)
+
+The `CircuitBreaker` implements the circuit breaker pattern for resilient external API calls:
+
+```python
+# core/circuit_breaker.py
+
+class CircuitState(enum.Enum):
+    CLOSED = "closed"      # Normal operation
+    OPEN = "open"          # Blocking calls
+    HALF_OPEN = "half_open"  # Testing recovery
+
+class CircuitBreaker:
+    """
+    Circuit breaker for external API resilience (e.g., yfinance).
+    
+    State machine:
+    - CLOSED → OPEN: When failure_count >= failure_threshold
+    - OPEN → HALF_OPEN: When recovery_timeout elapses
+    - HALF_OPEN → CLOSED: On successful call
+    - HALF_OPEN → OPEN: On failed call
+    """
+    
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        recovery_timeout: float = 60.0,
+        name: str = "default"
+    ):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.name = name
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+    
+    def call(self, func: Callable[..., T], *args, **kwargs) -> T:
+        """Execute function with circuit breaker protection."""
+        if self.state == CircuitState.OPEN:
+            raise CircuitOpenError(f"Circuit {self.name} is OPEN")
+        
+        try:
+            result = func(*args, **kwargs)
+            self._on_success()
+            return result
+        except Exception as e:
+            self._on_failure()
+            raise
+
+# Decorator usage
+@circuit_breaker(failure_threshold=3, name="yfinance")
+def fetch_data(ticker):
+    return yf.Ticker(ticker).history()
+```
+
+**Configuration (settings.py or environment):**
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `circuit_breaker_failure_threshold` | 5 | Failures before opening |
+| `circuit_breaker_recovery_timeout` | 60.0 | Seconds before retry |
+
+#### 4.6.7 Data Freshness Service (Phase 3)
+
+Monitors data lake freshness and alerts on stale data:
+
+```python
+# core/freshness.py
+
+class DataFreshnessService:
+    """
+    Check and report data freshness status.
+    
+    Compares the most recent data date against today to determine
+    if data is stale based on a configurable threshold.
+    """
+    
+    def __init__(self, threshold_hours: float = 24.0):
+        self.threshold_hours = threshold_hours
+    
+    def get_freshness_status(self) -> Tuple[bool, float, Optional[date]]:
+        """Check data freshness.
+        
+        Returns:
+            Tuple of (is_fresh, lag_hours, last_date)
+        """
+        last_date = self._get_max_date()
+        lag_hours = self._calculate_lag_hours(last_date)
+        is_fresh = lag_hours <= self.threshold_hours
+        return is_fresh, lag_hours, last_date
+    
+    def check_and_log(self) -> bool:
+        """Check freshness and log appropriate message."""
+        is_fresh, lag_hours, last_date = self.get_freshness_status()
+        if is_fresh:
+            logger.info(f"[FRESHNESS] Data is fresh (lag: {lag_hours:.1f}h)")
+        else:
+            logger.warning(f"[FRESHNESS] Data is STALE - lag: {lag_hours:.1f}h")
+        return is_fresh
+
+# Usage in startup
+freshness_service = get_data_freshness_service()
+freshness_service.check_and_log()
+```
+
+#### 4.6.8 Database Migrations (Alembic)
+
+The system uses Alembic for schema management:
+
+```python
+# alembic/env.py
+
+from config.settings import get_settings
+from app.core.database import Base
+
+# Import all models to register with Base.metadata
+from compute.job_store import Job
+from quant.data.models import MarketDataDaily
+
+# Use project settings for database URL
+settings = get_settings()
+config.set_main_option("sqlalchemy.url", settings.database_url)
+target_metadata = Base.metadata
+```
+
+**Migration Commands:**
+
+```bash
+# Generate migration from model changes
+alembic revision --autogenerate -m "description"
+
+# Apply pending migrations
+alembic upgrade head
+
+# Rollback one step
+alembic downgrade -1
+
+# Show current revision
+alembic current
+```
+
+**Auto-migration on Startup:**
+
+```python
+# app/core/migrations.py
+
+def run_migrations():
+    """Apply pending Alembic migrations."""
+    from alembic.config import Config
+    from alembic import command
+    
+    alembic_cfg = Config("alembic.ini")
+    command.upgrade(alembic_cfg, "head")
+```
+
+#### 4.6.9 Centralized Configuration (Pydantic Settings)
+
+All configuration is managed through Pydantic Settings:
+
+```python
+# config/settings.py
+
+class Settings(BaseSettings):
+    """Application settings with environment variable support."""
+    
+    # Database
+    database_url: str = "sqlite:///./data/database.sqlite"
+    
+    # Data Lake
+    data_lake_path: str = "./data_lake"
+    
+    # API
+    cors_origins: List[str] = ["http://localhost:5173"]
+    
+    # MLflow
+    mlflow_tracking_uri: str = "./mlruns"
+    
+    # Feature Flags
+    debug_mode: bool = False
+    
+    # Job Configuration
+    job_max_retries: int = 3
+    job_retry_base_delay: float = 4.0
+    job_retry_max_delay: float = 60.0
+    
+    # Data Freshness (Phase 3)
+    data_freshness_threshold_hours: float = 24.0
+    
+    # Circuit Breaker (Phase 3)
+    circuit_breaker_failure_threshold: int = 5
+    circuit_breaker_recovery_timeout: float = 60.0
+    
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": False,
+    }
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+```
+
+**Environment Variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | `sqlite:///./data/database.sqlite` | SQLAlchemy DB URL |
+| `DATA_LAKE_PATH` | `./data_lake` | Parquet storage path |
+| `CORS_ORIGINS` | `["http://localhost:5173"]` | JSON array |
+| `DATA_FRESHNESS_THRESHOLD_HOURS` | `24.0` | Staleness threshold |
+| `CIRCUIT_BREAKER_FAILURE_THRESHOLD` | `5` | Failures before open |
+| `CIRCUIT_BREAKER_RECOVERY_TIMEOUT` | `60.0` | Recovery wait seconds |
+
+#### 4.6.10 Health Endpoints (Phase 3)
+
+Production-grade health checking:
+
+```python
+# app/api/v1/endpoints/health.py
+
+@router.get("/health")
+async def health():
+    """Liveness probe - returns healthy if running."""
+    return {"status": "healthy"}
+
+@router.get("/ready")
+async def ready(db: Session = Depends(get_db)):
+    """Readiness probe - checks database and data freshness."""
+    checks = {}
+    
+    # Database check
+    db.execute(text("SELECT 1"))
+    checks["database"] = "ok"
+    
+    # Data freshness
+    checks["data_lag_hours"] = _compute_data_lag()
+    
+    return {
+        "status": "ready" if all_ok else "not_ready",
+        "checks": checks
+    }
+
+@router.get("/health/deep")
+async def deep_health(db: Session = Depends(get_db)):
+    """Deep health check - validates all dependencies."""
+    checks = {
+        "database": "healthy",
+        "data_lake": "healthy" if Path(settings.data_lake_path).exists() else "unhealthy",
+        "data_freshness": freshness_service.get_freshness_status()
+    }
+    return {
+        "status": "healthy" if core_healthy else "degraded",
+        "checks": checks,
+        "data_freshness_hours": lag_hours
+    }
+```
+
+**Response Examples:**
+
+```json
+// GET /api/v1/health
+{"status": "healthy"}
+
+// GET /api/v1/ready
+{
+  "status": "ready",
+  "checks": {
+    "database": "ok",
+    "data_lag_hours": 2.5
+  },
+  "timestamp": "2024-12-10T10:30:00Z"
+}
+
+// GET /api/v1/health/deep
+{
+  "status": "healthy",
+  "checks": {
+    "database": "healthy",
+    "data_lake": "healthy",
+    "data_freshness": "healthy"
+  },
+  "data_freshness_hours": 2.5,
+  "data_last_date": "2024-12-10"
+}
+```
+
 ---
 
 ## 5. API Reference
@@ -1497,6 +1825,9 @@ class ExperimentStore:
 
 | Endpoint | Method | Description | Parameters |
 |----------|--------|-------------|------------|
+| `/health` | GET | Liveness probe | - |
+| `/ready` | GET | Readiness probe | - |
+| `/health/deep` | GET | Deep health check | - |
 | `/quant/rankings` | GET | Latest stock rankings | `model`, `limit` |
 | `/quant/portfolio` | GET | Portfolio target weights | `model` |
 | `/quant/portfolios` | GET | All portfolio models | - |
@@ -1758,6 +2089,32 @@ def setup_logging():
 | Regime confidence | < 60% | Review HMM fit |
 | Portfolio turnover | > 50% monthly | Review constraints |
 | VaR breach | > 3% daily | Trigger hedge overlay |
+| Data freshness | > 24 hours stale | Check yfinance API |
+| Circuit breaker | OPEN state | Review API failures |
+
+#### 7.3.3 Health Endpoints
+
+Monitor system health via REST endpoints:
+
+```bash
+# Basic liveness check
+curl http://localhost:8000/api/v1/health
+
+# Readiness check (database + data freshness)
+curl http://localhost:8000/api/v1/ready
+
+# Deep health check (all dependencies)
+curl http://localhost:8000/api/v1/health/deep
+```
+
+#### 7.3.4 Data Freshness Alerting
+
+The system automatically logs data staleness on startup:
+
+```
+[FRESHNESS] Data is fresh (lag: 2.5h, last: 2024-12-10)
+[FRESHNESS] Data is STALE - lag: 48.0h exceeds threshold 24.0h
+```
 
 ---
 
@@ -1787,7 +2144,14 @@ source venv/bin/activate  # Linux/macOS
 # Install dependencies
 pip install -r requirements.txt
 
-# Initialize database
+# Copy environment file and configure
+cp .env.example .env
+# Edit .env as needed
+
+# Run database migrations
+alembic upgrade head
+
+# Initialize database (creates tables if not using Alembic)
 python -c "from app.core.database import init_db; init_db()"
 
 # Seed securities universe
@@ -1799,11 +2163,37 @@ python scripts/download_history.py
 
 ### 8.3 Environment Configuration
 
+Create a `.env` file from the template:
+
 ```bash
-# Optional environment variables
-export DATA_LAKE_PATH="./data_lake"
-export MLFLOW_TRACKING_URI="./mlruns"
-export RAY_NUM_CPUS=4
+# Copy template
+cp .env.example .env
+```
+
+**Key environment variables:**
+
+```bash
+# Database Configuration
+DATABASE_URL=sqlite:///./data/database.sqlite
+
+# Data Lake Path
+DATA_LAKE_PATH=./data_lake
+
+# API Configuration
+CORS_ORIGINS=["http://localhost:5173","http://localhost:3000"]
+
+# MLflow
+MLFLOW_TRACKING_URI=./mlruns
+
+# Ray Configuration
+RAY_NUM_CPUS=4
+
+# Data Freshness (Phase 3)
+DATA_FRESHNESS_THRESHOLD_HOURS=24.0
+
+# Circuit Breaker (Phase 3)
+CIRCUIT_BREAKER_FAILURE_THRESHOLD=5
+CIRCUIT_BREAKER_RECOVERY_TIMEOUT=60.0
 ```
 
 ### 8.4 Running the Server
@@ -1829,6 +2219,10 @@ open http://localhost:8000/docs
 |----------|----------|---------|
 | Unit Tests | `tests/test_*.py` | Individual component testing |
 | Integration Tests | `tests/test_api.py` | API endpoint validation |
+| Health Tests | `tests/test_health_endpoints.py` | Health and readiness endpoints |
+| Infrastructure Tests | `tests/test_infrastructure*.py` | Phase 1-3 infrastructure |
+| Validation Tests | `tests/test_validation*.py` | Data validation framework |
+| Property Tests | `tests/test_*_properties.py` | Property-based testing |
 | Tier Tests | `tests/test_tier*.py` | Feature tier validation |
 | Backtest Tests | `tests/test_backtest*.py` | Simulation determinism |
 | Stage Tests | `tests/test_stage*.py` | Stage-specific validation |
