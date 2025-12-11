@@ -7,13 +7,14 @@ import logging
 import time
 from datetime import datetime
 from contextlib import contextmanager
-from typing import Optional
+from typing import Optional, Generator
 
 from sqlalchemy.orm import Session
 
 from core.metrics import get_metrics_collector, MetricsCollector
+from core.structured_logger import get_structured_logger
 
-logger = logging.getLogger(__name__)
+logger = get_structured_logger("Monitoring")
 
 
 class MonitoringService:
@@ -23,22 +24,31 @@ class MonitoringService:
     and persists to JSONL via MetricsCollector.
     """
     
+    db: Optional[Session]
+    _metrics: MetricsCollector
+    
     def __init__(
         self, 
-        db: Session = None,
-        metrics_collector: MetricsCollector = None
-    ):
+        db: Optional[Session] = None,
+        metrics_collector: Optional[MetricsCollector] = None
+    ) -> None:
+        """Initialize MonitoringService.
+        
+        Args:
+            db: Optional SQLAlchemy session
+            metrics_collector: Optional MetricsCollector instance
+        """
         self.db = db
         self._metrics = metrics_collector or get_metrics_collector()
     
-    def record_success(self, job_name: str, duration_seconds: float = 0.0):
+    def record_success(self, job_name: str, duration_seconds: float = 0.0) -> None:
         """Record a successful job run.
         
         Args:
             job_name: Name/type of the job
             duration_seconds: How long the job took
         """
-        logger.info(f"MONITORING: Job '{job_name}' SUCCEEDED at {datetime.now()}")
+        logger.info(f"Job '{job_name}' SUCCEEDED at {datetime.now()}")
         
         # Persist to JSONL
         self._metrics.record_job(
@@ -47,7 +57,7 @@ class MonitoringService:
             duration_seconds=duration_seconds
         )
         
-    def record_failure(self, job_name: str, error: str, duration_seconds: float = 0.0):
+    def record_failure(self, job_name: str, error: str, duration_seconds: float = 0.0) -> None:
         """Record a failed job run.
         
         Args:
@@ -55,7 +65,7 @@ class MonitoringService:
             error: Error message
             duration_seconds: How long before failure
         """
-        logger.error(f"MONITORING: Job '{job_name}' FAILED at {datetime.now()}. Error: {error}")
+        logger.error(f"Job '{job_name}' FAILED at {datetime.now()}. Error: {error}")
         
         # Persist to JSONL
         self._metrics.record_job(
@@ -65,7 +75,7 @@ class MonitoringService:
         )
     
     @contextmanager
-    def track_job(self, job_name: str):
+    def track_job(self, job_name: str) -> Generator[None, None, None]:
         """Context manager for tracking job execution.
         
         Usage:
@@ -89,7 +99,7 @@ class MonitoringService:
             self.record_failure(job_name, str(e), duration)
             raise
     
-    def check_data_freshness(self, ticker: str = None) -> bool:
+    def check_data_freshness(self, ticker: Optional[str] = None) -> bool:
         """Check if data is fresh (within threshold).
         
         Args:

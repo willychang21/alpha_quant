@@ -1,18 +1,48 @@
+"""Valuation Engine Module.
+
+Implements DCF (Discounted Cash Flow) valuation with configurable assumptions.
+"""
+
 from sqlalchemy.orm import Session
 from quant.data.models import Security, MarketDataDaily, Fundamentals
 from datetime import date
+from typing import Optional, Dict, Any
 import pandas as pd
-import logging
 
-logger = logging.getLogger(__name__)
+# Import infrastructure
+from core.structured_logger import get_structured_logger
+from config.quant_config import get_valuation_config, ValuationConfig
+
+logger = get_structured_logger("ValuationEngine")
+
 
 class ValuationEngine:
-    def __init__(self, db: Session):
-        self.db = db
-
-    def calculate_dcf(self, sid: int, valuation_date: date):
+    """DCF Valuation Engine with configurable assumptions.
+    
+    Uses ValuationConfig for WACC, growth rates, and projection parameters.
+    All assumptions can be overridden via environment variables.
+    """
+    
+    def __init__(self, db: Session, config: Optional[ValuationConfig] = None):
+        """Initialize ValuationEngine.
+        
+        Args:
+            db: SQLAlchemy database session
+            config: Optional ValuationConfig, uses singleton if not provided
         """
-        Calculate DCF Valuation for a security.
+        self.db = db
+        self.config = config or get_valuation_config()
+
+    def calculate_dcf(self, sid: int, valuation_date: date) -> Optional[Dict[str, Any]]:
+        """Calculate DCF Valuation for a security.
+        
+        Args:
+            sid: Security ID
+            valuation_date: Date for valuation
+            
+        Returns:
+            Dict with fair_value, upside, wacc, growth_rate, price
+            or None if insufficient data
         """
         # 1. Fetch Inputs
         price = self._get_price(sid, valuation_date)
@@ -40,12 +70,11 @@ class ValuationEngine:
             logger.warning(f"Missing key inputs for DCF (SID: {sid})")
             return None
             
-        # 2. Assumptions (Simplified for MVP)
-        # In production, these would come from a 'Assumptions' table or model
-        wacc = 0.09 # 9% WACC
-        growth_rate = 0.05 # 5% Growth
-        terminal_growth = 0.02 # 2% Terminal
-        projection_years = 5
+        # 2. Get assumptions from config (supports env variable overrides)
+        wacc = self.config.wacc
+        growth_rate = self.config.growth_rate
+        terminal_growth = self.config.terminal_growth
+        projection_years = self.config.projection_years
         
         # 3. Projection
         projected_fcf = []
@@ -76,16 +105,35 @@ class ValuationEngine:
             'price': price
         }
 
-    def _get_price(self, sid: int, date):
+    def _get_price(self, sid: int, target_date: date) -> Optional[float]:
+        """Get the most recent price for a security.
+        
+        Args:
+            sid: Security ID
+            target_date: Target date for price lookup
+            
+        Returns:
+            Adjusted close price or None if not found
+        """
         record = self.db.query(MarketDataDaily)\
-            .filter(MarketDataDaily.sid == sid, MarketDataDaily.date <= date)\
+            .filter(MarketDataDaily.sid == sid, MarketDataDaily.date <= target_date)\
             .order_by(MarketDataDaily.date.desc())\
             .first()
         return record.adj_close if record else None
 
-    def _get_fundamental(self, sid: int, date, metric: str):
+    def _get_fundamental(self, sid: int, target_date: date, metric: str) -> Optional[float]:
+        """Get the most recent fundamental metric for a security.
+        
+        Args:
+            sid: Security ID
+            target_date: Target date for lookup
+            metric: Metric name (e.g., 'Total Revenue', 'EBITDA')
+            
+        Returns:
+            Metric value or None if not found
+        """
         record = self.db.query(Fundamentals)\
-            .filter(Fundamentals.sid == sid, Fundamentals.metric == metric, Fundamentals.date <= date)\
+            .filter(Fundamentals.sid == sid, Fundamentals.metric == metric, Fundamentals.date <= target_date)\
             .order_by(Fundamentals.date.desc())\
             .first()
         return record.value if record else None

@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Optional, Tuple
 import logging
 
-logger = logging.getLogger(__name__)
+from core.structured_logger import get_structured_logger
+
+logger = get_structured_logger("DataFreshness")
 
 
 class DataFreshnessService:
@@ -18,11 +20,14 @@ class DataFreshnessService:
     if data is stale based on a configurable threshold.
     """
     
+    threshold_hours: float
+    _data_lake_path: Optional[Path]
+    
     def __init__(
         self, 
         threshold_hours: float = 24.0,
         data_lake_path: Optional[Path] = None
-    ):
+    ) -> None:
         """Initialize freshness service.
         
         Args:

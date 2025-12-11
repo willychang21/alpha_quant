@@ -7,7 +7,7 @@ in external services (e.g., yfinance) gracefully.
 import enum
 import time
 import logging
-from typing import Callable, TypeVar, Optional
+from typing import Callable, TypeVar, Optional, Any
 from functools import wraps
 
 logger = logging.getLogger(__name__)
@@ -42,12 +42,19 @@ class CircuitBreaker:
     - HALF_OPEN → OPEN: On failed call
     """
     
+    failure_threshold: int
+    recovery_timeout: float
+    name: str
+    _state: CircuitState
+    _failure_count: int
+    _last_failure_time: Optional[float]
+    
     def __init__(
         self,
         failure_threshold: int = 5,
         recovery_timeout: float = 60.0,
         name: str = "default"
-    ):
+    ) -> None:
         """Initialize circuit breaker.
         
         Args:
@@ -61,7 +68,7 @@ class CircuitBreaker:
         
         self._state = CircuitState.CLOSED
         self._failure_count = 0
-        self._last_failure_time: Optional[float] = None
+        self._last_failure_time = None
     
     @property
     def state(self) -> CircuitState:
@@ -104,13 +111,13 @@ class CircuitBreaker:
             self._on_failure()
             raise
     
-    def _on_success(self):
+    def _on_success(self) -> None:
         """Handle successful call."""
         if self._state == CircuitState.HALF_OPEN:
             self._transition_to(CircuitState.CLOSED)
         self._failure_count = 0
     
-    def _on_failure(self):
+    def _on_failure(self) -> None:
         """Handle failed call."""
         self._failure_count += 1
         self._last_failure_time = time.time()
@@ -126,7 +133,7 @@ class CircuitBreaker:
             return True
         return time.time() - self._last_failure_time >= self.recovery_timeout
     
-    def _transition_to(self, new_state: CircuitState):
+    def _transition_to(self, new_state: CircuitState) -> None:
         """Transition to new state with logging."""
         old_state = self._state
         self._state = new_state
@@ -137,7 +144,7 @@ class CircuitBreaker:
         if new_state == CircuitState.CLOSED:
             self._failure_count = 0
     
-    def reset(self):
+    def reset(self) -> None:
         """Manually reset circuit to CLOSED state."""
         self._state = CircuitState.CLOSED
         self._failure_count = 0

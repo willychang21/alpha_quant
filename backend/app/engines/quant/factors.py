@@ -1,33 +1,85 @@
+"""Quantitative Factor Analysis Module.
+
+Implements Citadel-tier factor scoring:
+- Quality (ROE, Margins, Leverage)
+- Value (P/E, P/B ratios)
+- Growth (Revenue, Earnings growth)
+- Momentum (Price vs 52-week high)
+
+Also includes Residual Income Model (RIM) and Risk Metrics.
+"""
+
 import pandas as pd
 import numpy as np
-import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
+
 from app.domain import schemas
 
-logger = logging.getLogger(__name__)
+# Import infrastructure
+from core.structured_logger import get_structured_logger
+from core.error_handler import handle_gracefully
+from config.quant_config import get_factor_config, FactorConfig
 
-def sanitize(value):
-    """Sanitize float values for JSON serialization."""
+logger = get_structured_logger("QuantEngine")
+
+
+def sanitize(value: Any) -> float:
+    """Sanitize float values for JSON serialization.
+    
+    Args:
+        value: Any numeric value to sanitize
+        
+    Returns:
+        0.0 if NaN/Inf, otherwise float(value)
+    """
     if pd.isna(value) or np.isinf(value):
         return 0.0
     return float(value)
 
-def linear_score(val, min_val, max_val):
+def linear_score(val: Optional[float], min_val: float, max_val: float) -> float:
     """
     Continuous scoring function using linear interpolation.
+    
     Maps val to 0-100 scale based on range [min_val, max_val].
     Avoids discrete cliff-edge risks in factor scoring.
+    
+    Args:
+        val: Value to score
+        min_val: Value that maps to 0
+        max_val: Value that maps to 100
+        
+    Returns:
+        Score between 0 and 100
     """
-    if pd.isna(val):
+    if val is None or pd.isna(val):
         return 50.0
     score = np.interp(val, [min_val, max_val], [0, 100])
     return float(np.clip(score, 0, 100))
 
-def get_quant_analysis(ticker: str, info: dict, income: pd.DataFrame, balance: pd.DataFrame, cashflow: pd.DataFrame, history: pd.DataFrame) -> Tuple:
+def get_quant_analysis(
+    ticker: str,
+    info: Dict[str, Any],
+    income: pd.DataFrame,
+    balance: pd.DataFrame,
+    cashflow: pd.DataFrame,
+    history: pd.DataFrame
+) -> Tuple[schemas.QuantScore, Optional[schemas.ResidualIncomeOutput], schemas.RiskMetrics]:
     """
     Main entry point for Quant Analysis.
-    Returns (QuantScore, ResidualIncomeOutput, RiskMetrics)
+    
+    Args:
+        ticker: Stock ticker symbol
+        info: Ticker info dict from yfinance
+        income: Income statement DataFrame
+        balance: Balance sheet DataFrame
+        cashflow: Cashflow statement DataFrame
+        history: Price history DataFrame
+        
+    Returns:
+        Tuple of (QuantScore, ResidualIncomeOutput, RiskMetrics)
     """
+    logger.info(f"Running quant analysis for {ticker}")
+    
     # 1. Calculate Factor Scores
     quant_score = calculate_factor_scores(info, income, balance, cashflow, history)
     
@@ -39,10 +91,26 @@ def get_quant_analysis(ticker: str, info: dict, income: pd.DataFrame, balance: p
     
     return quant_score, rim_output, risk_metrics
 
-def calculate_factor_scores(info: dict, income: pd.DataFrame, balance: pd.DataFrame, cashflow: pd.DataFrame, history: pd.DataFrame) -> schemas.QuantScore:
+def calculate_factor_scores(
+    info: Dict[str, Any],
+    income: pd.DataFrame,
+    balance: pd.DataFrame,
+    cashflow: pd.DataFrame,
+    history: pd.DataFrame
+) -> schemas.QuantScore:
     """
     Calculates 0-100 scores using continuous mapping (avoiding discrete steps).
     Uses linear interpolation for smooth transitions between score ranges.
+    
+    Args:
+        info: Ticker info dict
+        income: Income statement DataFrame
+        balance: Balance sheet DataFrame
+        cashflow: Cashflow statement DataFrame
+        history: Price history DataFrame
+        
+    Returns:
+        QuantScore with quality, value, growth, momentum, and total scores
     """
     details = {}
     

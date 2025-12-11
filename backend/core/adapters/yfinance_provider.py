@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import concurrent.futures
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
@@ -7,7 +6,12 @@ import yfinance as yf
 import pandas as pd
 from core.adapters.base import MarketDataProvider
 
-logger = logging.getLogger(__name__)
+# Import infrastructure
+from core.structured_logger import get_structured_logger
+from core.error_handler import with_retry, handle_gracefully
+from core.rate_limiter import get_yfinance_rate_limiter
+
+logger = get_structured_logger("CoreYFinanceProvider")
 
 class YFinanceProvider(MarketDataProvider):
     """
@@ -18,6 +22,7 @@ class YFinanceProvider(MarketDataProvider):
     _cache: Dict[str, Any] = {}
     _cache_expiry: Dict[str, datetime] = {}
     _executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
+    _rate_limiter = None
     
     # Cache TTL settings
     TTL_INFO = timedelta(minutes=60)
@@ -27,12 +32,14 @@ class YFinanceProvider(MarketDataProvider):
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(YFinanceProvider, cls).__new__(cls)
+            cls._instance._rate_limiter = get_yfinance_rate_limiter()
         return cls._instance
 
     async def get_ticker_data(self, ticker: str) -> Dict[str, Any]:
         logger.info(f"Fetching data for {ticker} via YFinance...")
         
         loop = asyncio.get_running_loop()
+        await self._rate_limiter.acquire()
         t = yf.Ticker(ticker)
         
         try:
@@ -131,9 +138,10 @@ class YFinanceProvider(MarketDataProvider):
     async def _fetch_history(self, loop, ticker_obj, ticker_symbol) -> pd.DataFrame:
         cache_key = f"hist_{ticker_symbol}"
         cached = self._get_from_cache(cache_key)
-        if cached:
+        if cached is not None:
             return cached
             
+        @with_retry(max_retries=2, base_delay=0.5, on_data_error=pd.DataFrame())
         def fetch():
             return ticker_obj.history(period="2y")
             
@@ -155,6 +163,7 @@ class YFinanceProvider(MarketDataProvider):
         if cached is not None:
             return cached
             
+        @with_retry(max_retries=2, base_delay=0.5, on_data_error=pd.DataFrame())
         def fetch():
             # yfinance property is earnings_estimate
             try:

@@ -1,10 +1,26 @@
-import logging
+"""Valuation Engine Core Module.
+
+Main entry point for stock valuation, dispatching to appropriate models
+based on sector (DCF, DDM, REIT). Includes Wall Street ensemble and
+quantitative analysis integration.
+"""
+
+import time
+from typing import Dict, List, Optional, Tuple, Any
+
 import pandas as pd
+
 from app.domain import schemas
 from app.engines.valuation import dcf, ddm, reit, utils
 from app.engines.quant import factors as quant_engine
 
-logger = logging.getLogger(__name__)
+# Import infrastructure
+from core.structured_logger import get_structured_logger
+from core.error_handler import handle_gracefully
+from config.quant_config import get_valuation_config, ValuationConfig
+
+logger = get_structured_logger("ValuationEngine")
+
 
 def get_valuation(ticker: str, info: dict, income: pd.DataFrame, balance: pd.DataFrame, cashflow: pd.DataFrame, history: pd.DataFrame = pd.DataFrame(), is_quarterly: bool = False, exchange_rate: float = 1.0) -> schemas.ValuationResult:
     """

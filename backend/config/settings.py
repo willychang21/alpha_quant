@@ -52,10 +52,31 @@ class Settings(BaseSettings):
     circuit_breaker_failure_threshold: int = 5
     circuit_breaker_recovery_timeout: float = 60.0
     
+    # Rate Limiting
+    rate_limit_requests_per_second: float = 2.0
+    rate_limit_burst_size: int = 5
+    
+    # Logging
+    log_dev_mode: bool = False
+    
+    # Valuation Defaults
+    valuation_wacc: float = 0.09
+    valuation_growth_rate: float = 0.05
+    valuation_terminal_growth: float = 0.02
+    
+    # Optimization Defaults
+    optimization_max_weight: float = 0.10
+    optimization_risk_aversion: float = 1.0
+    
+    # Factor Weights (JSON string)
+    factor_weights_bull: str = '{"value": 0.3, "growth": 0.4, "momentum": 0.3}'
+    factor_weights_bear: str = '{"value": 0.5, "growth": 0.2, "momentum": 0.3}'
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
+        "extra": "ignore"  # Allow extra fields in .env
     }
 
 

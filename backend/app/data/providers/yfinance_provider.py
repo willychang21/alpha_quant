@@ -1,86 +1,125 @@
+"""YFinance Data Provider Module.
+
+Provides functions for fetching stock data from Yahoo Finance:
+- Asset search
+- Holdings for ETFs
+- Price data
+- Fundamental data
+"""
+
 import yfinance as yf
 import pandas as pd
 import requests
 import json
 import os
-import logging
-from app.domain import schemas
 import math
+from typing import Dict, List, Optional, Any
 
-logger = logging.getLogger(__name__)
+from app.domain import schemas
 
-def search_assets(query: str):
-    try:
-        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        r = requests.get(url, headers=headers)
-        data = r.json()
+# Import infrastructure
+from core.structured_logger import get_structured_logger
+from core.error_handler import with_retry, handle_gracefully
+from core.rate_limiter import get_yfinance_rate_limiter
+
+logger = get_structured_logger("YFinanceProvider")
+
+# Get rate limiter instance
+_rate_limiter = get_yfinance_rate_limiter()
+
+
+
+@with_retry(max_retries=2, base_delay=0.5, on_data_error=[])
+def search_assets(query: str) -> List[Dict[str, Any]]:
+    """Search for assets on Yahoo Finance.
+    
+    Args:
+        query: Search query string
         
-        results = []
-        if 'quotes' in data:
-            for q in data['quotes']:
-                if q.get('isYahooFinance', False):
-                    results.append({
-                        "symbol": q.get('symbol'),
-                        "shortname": q.get('shortname') or q.get('longname') or q.get('symbol'),
-                        "exchange": q.get('exchange'),
-                        "typeDisp": q.get('typeDisp')
-                    })
-        return results
-    except Exception as e:
-        logger.error(f"Search error: {e}")
-        return []
+    Returns:
+        List of matching assets with symbol, name, exchange info
+    """
+    # Rate limit
+    _rate_limiter.acquire_sync()
+    
+    url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    r = requests.get(url, headers=headers)
+    data = r.json()
+    
+    results = []
+    if 'quotes' in data:
+        for q in data['quotes']:
+            if q.get('isYahooFinance', False):
+                results.append({
+                    "symbol": q.get('symbol'),
+                    "shortname": q.get('shortname') or q.get('longname') or q.get('symbol'),
+                    "exchange": q.get('exchange'),
+                    "typeDisp": q.get('typeDisp')
+                })
+    return results
 
-def fetch_holdings(ticker: str):
+@handle_gracefully(default=[])
+def fetch_holdings(ticker: str) -> List[Dict[str, Any]]:
     """
     Fetch ETF/Fund holdings directly from yfinance.
     
     NOTE: This is real-time data only. Do NOT use for backtesting
     as it would cause Look-Ahead Bias. For backtesting, use ETF
     prices directly instead of decomposing into holdings.
-    """
-    holdings = []
     
-    try:
-        t = yf.Ticker(ticker)
+    Args:
+        ticker: ETF or fund ticker symbol
         
-        # Try to get holdings from funds_data
-        if hasattr(t, 'funds_data') and t.funds_data and hasattr(t.funds_data, 'top_holdings'):
-            top_holdings = t.funds_data.top_holdings
-            if isinstance(top_holdings, pd.DataFrame):
-                for symbol, row in top_holdings.iterrows():
-                    percent = 0
-                    if 'Holding Percent' in row:
-                        percent = float(row['Holding Percent'])
-                    elif 'Holding %' in row:
-                        percent = float(row['Holding %'])
-                    
-                    holdings.append({
-                        "ticker": str(symbol),
-                        "name": str(row.get('Name', symbol)),
-                        "percent": percent * 100
-                    })
-                    
-    except Exception as e:
-        logger.warning(f"Could not fetch holdings for {ticker}: {e}")
-        
+    Returns:
+        List of holdings with ticker, name, percent
+    """
+    _rate_limiter.acquire_sync()
+    
+    holdings = []
+    t = yf.Ticker(ticker)
+    
+    # Try to get holdings from funds_data
+    if hasattr(t, 'funds_data') and t.funds_data and hasattr(t.funds_data, 'top_holdings'):
+        top_holdings = t.funds_data.top_holdings
+        if isinstance(top_holdings, pd.DataFrame):
+            for symbol, row in top_holdings.iterrows():
+                percent = 0
+                if 'Holding Percent' in row:
+                    percent = float(row['Holding Percent'])
+                elif 'Holding %' in row:
+                    percent = float(row['Holding %'])
+                
+                holdings.append({
+                    "ticker": str(symbol),
+                    "name": str(row.get('Name', symbol)),
+                    "percent": percent * 100
+                })
+    
     return holdings
 
 
-def get_asset_details(ticker: str):
-    try:
-        t = yf.Ticker(ticker)
-        info = t.info
-        holdings = fetch_holdings(ticker)
+@handle_gracefully(default={"ticker": "", "type": "EQUITY", "holdings": []})
+def get_asset_details(ticker: str) -> Dict[str, Any]:
+    """Get detailed asset information including holdings.
+    
+    Args:
+        ticker: Stock or ETF ticker symbol
         
-        return {
-            "ticker": ticker,
-            "type": info.get('quoteType', 'EQUITY'),
-            "holdings": holdings
-        }
-    except Exception as e:
-        logger.error(f"Error fetching details for {ticker}: {e}")
-        return {"ticker": ticker, "type": "EQUITY", "holdings": []}
+    Returns:
+        Dict with ticker, type, and holdings
+    """
+    _rate_limiter.acquire_sync()
+    
+    t = yf.Ticker(ticker)
+    info = t.info
+    holdings = fetch_holdings(ticker)
+    
+    return {
+        "ticker": ticker,
+        "type": info.get('quoteType', 'EQUITY'),
+        "holdings": holdings
+    }
 
 def get_price_data(ticker: str):
     try:

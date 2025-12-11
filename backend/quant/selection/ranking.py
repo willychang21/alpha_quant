@@ -1,3 +1,13 @@
+"""Ranking Engine Module.
+
+Implements multi-factor stock ranking with:
+- Volatility Scaled Momentum (VSM)
+- Betting Against Beta (BAB)
+- Quality Minus Junk (QMJ)
+- PEAD, Sentiment, Analyst Revisions
+- HMM-based regime detection for dynamic factor weighting
+"""
+
 from sqlalchemy.orm import Session
 from quant.data.models import Security, ModelSignals
 from quant.features.fundamental import ValueFactor, QualityFactor, GrowthFactor
@@ -17,19 +27,40 @@ from quant.features.revisions import AnalystRevisions
 from quant.features.valuation_composite import ValuationComposite
 from quant.regime.hmm import RegimeDetector, DynamicFactorWeights
 from datetime import date
+from typing import Dict, List, Optional, Any
 import pandas as pd
 import numpy as np
 import json
-import logging
 import asyncio
 
-logger = logging.getLogger(__name__)
+# Import infrastructure
+from core.structured_logger import get_structured_logger
+from core.error_handler import handle_gracefully, with_retry
+from core.rate_limiter import get_yfinance_rate_limiter
+from config.quant_config import get_factor_config, FactorConfig
+
+logger = get_structured_logger("RankingEngine")
+
+
 
 class RankingEngine:
-    def __init__(self, db: Session):
+    """Multi-factor stock ranking engine with regime-adaptive weighting.
+    
+    Uses FactorConfig for factor weights and RateLimiter for API calls.
+    """
+    
+    def __init__(self, db: Session, config: Optional[FactorConfig] = None):
+        """Initialize RankingEngine.
+        
+        Args:
+            db: SQLAlchemy database session
+            config: Optional FactorConfig, uses singleton if not provided
+        """
         self.db = db
         self.market_data = YFinanceProvider()
         self.valuation_orchestrator = ValuationOrchestrator()
+        self.config = config or get_factor_config()
+        self._rate_limiter = get_yfinance_rate_limiter()
         
         # Initialize Feature Generators
         self.value_gen = ValueFactor()
@@ -62,9 +93,14 @@ class RankingEngine:
         self.regime_detector = RegimeDetector(n_states=2, lookback=252)
         self.current_regime = "Unknown"
 
-    async def run_ranking(self, ranking_date: date):
-        """
-        Run the ranking process for the given date.
+    async def run_ranking(self, ranking_date: date) -> Optional[pd.DataFrame]:
+        """Run the ranking process for the given date.
+        
+        Args:
+            ranking_date: Date for ranking calculation
+            
+        Returns:
+            DataFrame with top 20 ranked stocks or None if insufficient data
         """
         securities = self.db.query(Security).filter(Security.active == True).all()
         
@@ -143,11 +179,11 @@ class RankingEngine:
                 logger.error(f"Bulk download failed for chunk {i}: {e}")
                 bulk_history = pd.DataFrame()
 
-            semaphore = asyncio.Semaphore(1) # Reduce concurrency to avoid rate limits
+            semaphore = asyncio.Semaphore(3)  # Bounded concurrency
 
             async def process_ticker(sec):
                 async with semaphore:
-                    await asyncio.sleep(1.0) # Add delay
+                    await self._rate_limiter.acquire()  # Use centralized rate limiter
                     try:
                         # Extract History
                         history = pd.DataFrame()
@@ -335,11 +371,12 @@ class RankingEngine:
         
         return df.head(20)
 
-    def _store_signals(self, df: pd.DataFrame, ranking_date: date):
-        """
-        Store ranking signals to Parquet via SignalStore.
+    def _store_signals(self, df: pd.DataFrame, ranking_date: date) -> None:
+        """Store ranking signals to Parquet via SignalStore.
         
-        Replaces SQLite ModelSignals table.
+        Args:
+            df: DataFrame with ranking results
+            ranking_date: Date for the signals
         """
         from quant.data.signal_store import get_signal_store
         

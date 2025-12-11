@@ -1,5 +1,16 @@
+"""Portfolio Optimizer Module.
+
+Implements multiple optimization strategies:
+- HRP (Hierarchical Risk Parity)
+- Black-Litterman
+- MVO (Mean-Variance Optimization)
+- Kelly Criterion
+
+Integrates with RankingEngine signals and stores targets to Parquet.
+"""
+
 from sqlalchemy.orm import Session
-from typing import Dict, List, Any, Literal
+from typing import Dict, List, Any, Literal, Optional, Tuple, Union
 from quant.data.models import Security, MarketDataDaily, ModelSignals, PortfolioTargets
 from datetime import date, timedelta
 import pandas as pd
@@ -12,31 +23,64 @@ from quant.portfolio.advanced_optimizers import HRPOptimizer, BlackLittermanMode
 from quant.portfolio.kelly import optimize_multivariate_kelly
 from quant.portfolio.risk_control import apply_vol_targeting
 import yfinance as yf
-import logging
 
-logger = logging.getLogger(__name__)
+# Import infrastructure
+from core.structured_logger import get_structured_logger
+from core.rate_limiter import get_yfinance_rate_limiter
+from config.quant_config import get_optimization_config, OptimizationConfig
+
+logger = get_structured_logger("PortfolioOptimizer")
+
 
 class PortfolioOptimizer:
-    def __init__(self, db: Session):
+    """Portfolio optimizer with configurable constraints.
+    
+    Uses OptimizationConfig for default parameters. All defaults can be
+    overridden via environment variables or constructor arguments.
+    """
+    
+    def __init__(self, db: Session, config: Optional[OptimizationConfig] = None):
+        """Initialize PortfolioOptimizer.
+        
+        Args:
+            db: SQLAlchemy database session
+            config: Optional OptimizationConfig, uses singleton if not provided
+        """
         self.db = db
+        self.config = config or get_optimization_config()
+        self._rate_limiter = get_yfinance_rate_limiter()
 
     def run_optimization(
         self, 
         optimization_date: date, 
-        top_n: int = 50,  # Optimize top 50
-        max_weight: float = 0.10,  # Max 10% per stock
-        risk_aversion: float = 1.0,
-        optimizer: Literal['hrp', 'bl', 'mvo', 'kelly'] = 'hrp',  # Tier-1/2: Choose optimizer
-        target_vol: float = None,  # Tier-2: Volatility Targeting (e.g. 0.15)
-        sector_constraints: bool = False, # Phase 8
-        beta_constraints: bool = False    # Phase 8
-    ):
-        """
-        Run portfolio optimization on top ranked stocks.
+        top_n: Optional[int] = None,
+        max_weight: Optional[float] = None,
+        risk_aversion: Optional[float] = None,
+        optimizer: Literal['hrp', 'bl', 'mvo', 'kelly'] = 'hrp',
+        target_vol: Optional[float] = None,
+        sector_constraints: bool = False,
+        beta_constraints: bool = False
+    ) -> Optional[Union[Dict[str, Any], List[Tuple[str, float]]]]:
+        """Run portfolio optimization on top ranked stocks.
         
         Args:
-            optimizer: 'hrp' (Hierarchical Risk Parity), 'bl' (Black-Litterman), 'mvo' (Mean-Variance)
+            optimization_date: Date for optimization
+            top_n: Number of top stocks to optimize (default from config)
+            max_weight: Maximum weight per stock (default from config)
+            risk_aversion: Risk aversion parameter (default from config)
+            optimizer: Optimization method ('hrp', 'bl', 'mvo', 'kelly')
+            target_vol: Target volatility for vol targeting (optional)
+            sector_constraints: Enable sector weight constraints
+            beta_constraints: Enable beta constraints
+            
+        Returns:
+            Optimization results or None if insufficient data
         """
+        # Use config defaults if not specified
+        top_n = top_n if top_n is not None else self.config.top_n
+        max_weight = max_weight if max_weight is not None else self.config.max_weight
+        risk_aversion = risk_aversion if risk_aversion is not None else self.config.risk_aversion
+        target_vol = target_vol if target_vol is not None else self.config.target_vol
         # 1. Get Top Ranked Stocks (ranking_v3 with Tier-1 upgrades)
         top_picks = self.db.query(ModelSignals)\
             .filter(ModelSignals.date == optimization_date, ModelSignals.model_name == 'ranking_v3')\

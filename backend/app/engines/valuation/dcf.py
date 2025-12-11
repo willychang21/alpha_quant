@@ -1,8 +1,23 @@
-import logging
+"""DCF (Discounted Cash Flow) Valuation Module.
+
+Implements standard DCF valuation with:
+- Gordon Growth Model for terminal value
+- Exit Multiple approach
+- Sensitivity analysis across WACC and growth rates
+"""
+
+from typing import Dict, List, Optional, Any
+import pandas as pd
+
 from app.domain import schemas
 from app.engines.valuation import utils
 
-logger = logging.getLogger(__name__)
+# Import infrastructure
+from core.structured_logger import get_structured_logger
+
+logger = get_structured_logger("DCFEngine")
+
+
 
 def get_standard_dcf_valuation(ticker, info, inputs, wacc_details, wacc, beta, rf, mrp, income, balance, cashflow, exchange_rate=1.0):
     """
