@@ -1,0 +1,32 @@
+# Gitleaks configuration
+# https://github.com/gitleaks/gitleaks
+
+title = "DCA Gitleaks Config"
+
+[extend]
+# Use the default gitleaks config as base
+useDefault = true
+
+[allowlist]
+  description = "Allowlisted paths and patterns"
+  
+  # Paths to ignore (regex)
+  paths = [
+    '''\.env\.example$''',
+    '''tests/.*''',
+    '''__pycache__/.*''',
+    '''\.venv/.*''',
+    '''node_modules/.*''',
+    '''data_lake/.*''',
+    '''mlruns/.*''',
+    '''package-lock\.json$''',
+    '''\.hypothesis/.*''',
+  ]
+  
+  # Regex patterns for allowed strings (false positives)
+  regexes = [
+    '''example_api_key''',
+    '''your_api_key_here''',
+    '''placeholder''',
+    '''dummy''',
+  ]

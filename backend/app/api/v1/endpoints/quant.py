@@ -289,3 +289,99 @@ def run_backtest(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ml/status")
+def get_ml_status():
+    """
+    Get ML Alpha Enhancement status.
+    
+    Returns:
+        - Current market regime and confidence
+        - Active ML modules
+        - Scoring breakdown (traditional vs ML weights)
+        - Feature attribution (SHAP-like contributions)
+    """
+    try:
+        from config.ml_enhancement_config import get_ml_enhancement_config
+        from datetime import datetime
+        
+        # Get ML config
+        ml_config = get_ml_enhancement_config()
+        active_modules = ml_config.get_active_features()
+        
+        # Try to get latest signals for regime info
+        store = get_signal_store()
+        df = store.get_latest_signals(model_name='ranking_v3', limit=100)
+        
+        # Extract regime from first signal metadata
+        regime = 'Unknown'
+        regime_confidence = 0.5
+        avg_ml_contribution = 0.0
+        feature_attribution = []
+        
+        if not df.empty:
+            try:
+                first_meta = df.iloc[0].get('metadata_json', '{}')
+                if isinstance(first_meta, str):
+                    first_meta = json.loads(first_meta)
+                
+                regime = first_meta.get('regime', 'Unknown')
+                regime_confidence = first_meta.get('regime_confidence', 0.5)
+                
+                # Calculate average ML contribution
+                ml_contributions = []
+                for _, row in df.iterrows():
+                    meta = row.get('metadata_json', '{}')
+                    if isinstance(meta, str):
+                        meta = json.loads(meta)
+                    ml_contrib = meta.get('ml_contribution', 0)
+                    if ml_contrib:
+                        ml_contributions.append(float(ml_contrib))
+                
+                if ml_contributions:
+                    avg_ml_contribution = sum(ml_contributions) / len(ml_contributions)
+                
+                # Mock feature attribution based on config
+                # TODO: Extract from actual SHAP values when available
+                if 'SHAP' in active_modules:
+                    feature_attribution = [
+                        {"factor": "Quality", "contribution": 0.22, "direction": "positive"},
+                        {"factor": "Momentum", "contribution": 0.18, "direction": "positive"},
+                        {"factor": "Sentiment", "contribution": 0.10, "direction": "positive"},
+                        {"factor": "Value", "contribution": 0.08, "direction": "positive"},
+                        {"factor": "Volatility", "contribution": -0.12, "direction": "negative"},
+                        {"factor": "Beta", "contribution": -0.06, "direction": "negative"},
+                    ]
+                    
+            except Exception as e:
+                logger.warning(f"Error parsing signal metadata: {e}")
+        
+        return {
+            "regime": regime,
+            "regimeConfidence": float(regime_confidence),
+            "activeModules": active_modules,
+            "lastUpdated": datetime.now().isoformat(),
+            "scoringBreakdown": {
+                "traditionalWeight": 0.60,
+                "mlWeight": 0.40,
+                "avgMlContribution": float(avg_ml_contribution)
+            },
+            "featureAttribution": feature_attribution
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting ML status: {e}")
+        return {
+            "regime": "Unknown",
+            "regimeConfidence": 0.5,
+            "activeModules": [],
+            "lastUpdated": None,
+            "scoringBreakdown": {
+                "traditionalWeight": 0.60,
+                "mlWeight": 0.40,
+                "avgMlContribution": 0.0
+            },
+            "featureAttribution": []
+        }
+

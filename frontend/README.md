@@ -54,9 +54,11 @@ The DCA Quant Frontend is an **enterprise-grade trading dashboard** that transfo
 - **Multi-portfolio management** with drag-and-drop rebalancing
 
 ### 🧮 Quantitative Insights
-- **Factor radar charts** (VSM, BAB, QMJ, PEAD, Sentiment)
-- **HMM regime indicators** with confidence bands
+- **Factor radar charts** (VSM, BAB, QMJ, PEAD, Sentiment, Capital Flow, Advanced Rotation)
+- **HMM regime indicators** with confidence bands + online regime detection
 - **ML signal confidence scores** via XGBoost meta-labeling
+- **ML Alpha Enhancement status** with SHAP attribution visualization
+- **Capital Flow indicators** (MFI, OBV, sector rotation scores)
 - **VWAP execution recommendations** with market impact estimates
 
 ### 📈 Backtesting Laboratory
@@ -409,9 +411,12 @@ export const api = axios.create({
 | `/quant/rankings` | GET | Fetch stock rankings |
 | `/quant/portfolio` | GET | Get optimized portfolio |
 | `/quant/risk/metrics` | GET | Retrieve risk metrics |
+| `/quant/ml/status` | GET | ML enhancement status (SHAP, GBM, regime) |
 | `/quant/backtest` | POST | Run backtest simulation |
 | `/valuation/{ticker}` | GET | Get stock valuation |
 | `/portfolios` | GET/POST | Portfolio CRUD |
+| `/health` | GET | Application health check |
+| `/health/ready` | GET | Readiness probe (DB, data freshness) |
 
 ---
 

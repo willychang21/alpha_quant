@@ -1,5 +1,23 @@
 import api from './axios';
 
+/** ML Alpha status from backend */
+export interface MLAlphaStatus {
+    regime: 'Bull' | 'Bear' | 'Unknown';
+    regimeConfidence: number;
+    activeModules: string[];
+    lastUpdated: string | null;
+    scoringBreakdown: {
+        traditionalWeight: number;
+        mlWeight: number;
+        avgMlContribution: number;
+    };
+    featureAttribution?: Array<{
+        factor: string;
+        contribution: number;
+        direction: 'positive' | 'negative';
+    }>;
+}
+
 export interface MLSignalMetrics {
     status: string;
     run_id?: string;
@@ -31,6 +49,12 @@ export interface VWAPSchedule {
 }
 
 export const quantApi = {
+    /** Get ML Alpha Enhancement status */
+    getMLAlphaStatus: async (): Promise<MLAlphaStatus> => {
+        const response = await api.get('/quant/ml/status');
+        return response.data;
+    },
+
     getMLSignals: async (): Promise<MLSignalMetrics> => {
         const response = await api.get('/quant/ml/signals');
         return response.data;
@@ -50,3 +74,4 @@ export const quantApi = {
         return response.data;
     }
 };
+

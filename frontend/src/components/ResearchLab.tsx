@@ -8,6 +8,7 @@ import { getLatestSignals, Signal } from '../api/signals';
 import { motion } from 'framer-motion';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { FlaskConical, Filter, TrendingUp, ChevronDown, ChevronUp } from 'lucide-react';
+import { MLAlphaDashboard } from './MLAlphaDashboard';
 
 // Factor breakdown component for each signal
 const FactorBreakdown: React.FC<{ signal: Signal }> = ({ signal }) => {
@@ -169,6 +170,15 @@ const ResearchLab: React.FC = () => {
                         <div className="text-xs text-muted-foreground">Avg Z-Score</div>
                     </div>
                 </div>
+            </motion.div>
+
+            {/* ML Alpha Dashboard - NEW */}
+            <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1 }}
+            >
+                <MLAlphaDashboard />
             </motion.div>
 
             {/* Filters Card */}

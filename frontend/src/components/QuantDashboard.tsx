@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { motion } from "framer-motion";
+import { MLAlphaDashboard } from './MLAlphaDashboard';
 
 // ... (interfaces)
 
@@ -124,14 +125,15 @@ export function QuantDashboard() {
         </Button>
       </motion.div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* Main Grid: Rankings, Portfolio, ML Dashboard */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Top Picks */}
-        <Card className="col-span-1">
+        <Card className="lg:col-span-1">
           <CardHeader>
-            <CardTitle>Top Ranked Stocks (v3 + PEAD + Sentiment)</CardTitle>
+            <CardTitle>Top Ranked Stocks</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="max-h-[500px] overflow-y-auto">
+            <div className="max-h-[450px] overflow-y-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -140,7 +142,6 @@ export function QuantDashboard() {
                     <TableHead>Score</TableHead>
                     <TableHead>PEAD</TableHead>
                     <TableHead>Sent.</TableHead>
-                    <TableHead>Upside</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -155,9 +156,6 @@ export function QuantDashboard() {
                       <TableCell>
                         {getSentimentIcon(r.sentiment ?? 0)} {r.sentiment?.toFixed(2) ?? '0.00'}
                       </TableCell>
-                      <TableCell className={r.upside > 0 ? 'text-green-400' : 'text-red-400'}>
-                        {r.upside ? `${(r.upside * 100).toFixed(0)}%` : 'N/A'}
-                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -167,7 +165,7 @@ export function QuantDashboard() {
         </Card>
 
         {/* Portfolio Allocation */}
-        <Card className="col-span-1">
+        <Card className="lg:col-span-1">
           <CardHeader>
             <CardTitle>Target Allocation</CardTitle>
           </CardHeader>
@@ -178,7 +176,7 @@ export function QuantDashboard() {
                   data={portfolio as any[]}
                   cx="50%"
                   cy="50%"
-                  outerRadius={120}
+                  outerRadius={100}
                   fill="#8884d8"
                   dataKey="weight"
                   nameKey="ticker"
@@ -193,6 +191,11 @@ export function QuantDashboard() {
             </ResponsiveContainer>
           </CardContent>
         </Card>
+
+        {/* ML Alpha Dashboard */}
+        <div className="lg:col-span-1">
+          <MLAlphaDashboard />
+        </div>
       </div>
 
       {/* Backtest Results */}

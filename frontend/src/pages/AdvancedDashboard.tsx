@@ -5,6 +5,7 @@ import { FactorRadar } from '@/components/FactorRadar';
 import { SmartTradeTable } from '@/components/SmartTradeTable';
 import { RiskMonitor } from '@/components/RiskMonitor';
 import { SectorRotation } from '@/components/SectorRotation';
+import { MLAlphaDashboard } from '@/components/MLAlphaDashboard';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Activity, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -110,15 +111,20 @@ const AdvancedDashboard: React.FC = () => {
                 {/* Regime HUD */}
                 <RegimeBanner regime={data.regime} />
 
-                {/* Main Grid: Factor Attribution + Risk Monitor */}
+                {/* Main Grid: Factor Attribution + ML Dashboard + Risk Monitor */}
                 <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
-                    {/* Left: Factor Attribution (6 cols) */}
-                    <div className="md:col-span-6">
+                    {/* Left: Factor Attribution (4 cols) */}
+                    <div className="md:col-span-4">
                         <FactorRadar attribution={data.attribution} />
                     </div>
 
-                    {/* Right: Risk Monitor (6 cols) */}
-                    <div className="md:col-span-6">
+                    {/* Center: ML Alpha Dashboard (4 cols) */}
+                    <div className="md:col-span-4">
+                        <MLAlphaDashboard />
+                    </div>
+
+                    {/* Right: Risk Monitor (4 cols) */}
+                    <div className="md:col-span-4">
                         <RiskMonitor />
                     </div>
                 </div>

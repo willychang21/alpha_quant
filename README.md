@@ -28,8 +28,9 @@
 ## Features
 
 ### 🧮 Alpha Generation
-- **8+ Academic Factors**: VSM, BAB, QMJ, PEAD, Sentiment, Accruals, IVOL, Revisions
+- **12+ Academic Factors**: VSM, BAB, QMJ, PEAD, Sentiment, Capital Flow, Advanced Rotation, Accruals, IVOL, Revisions
 - **HMM Regime Detection**: Bull/Bear market classification with dynamic factor weighting
+- **Online Regime Detector**: Adaptive regime detection with exponential decay
 - **Triple Barrier Labeling**: Path-dependent target generation for ML
 - **XGBoost Meta-Labeling**: Confidence scoring for primary signals
 
@@ -48,6 +49,12 @@
 - **DDM**: Dividend Discount Model with growth staging
 - **RIM**: Residual Income Model for factor scoring
 - **REIT**: Specialized FFO-based valuation
+
+### 🤖 ML Alpha Enhancement
+- **SHAP Attribution**: Factor importance via Shapley values with concentration monitoring
+- **Constrained GBM**: LightGBM with monotonic constraints for economic intuition
+- **Residual Alpha Model**: Two-stage linear decomposition + ML residual prediction
+- **Supply Chain GNN**: Graph-based momentum propagation (optional)
 
 ---
 
@@ -204,7 +211,8 @@ npm run test
 GitHub Actions workflow (`.github/workflows/quant_ci.yml`):
 - Runs backend tests on push
 - Validates script dry runs
-- Linting & type checking
+- Linting & type checking (ruff, tsc)
+- **Security Scanning**: pip-audit (CVE detection), bandit (static analysis), npm audit, gitleaks (secret detection)
 
 ---
 

@@ -6,6 +6,7 @@ Implements multi-factor stock ranking with:
 - Quality Minus Junk (QMJ)
 - PEAD, Sentiment, Analyst Revisions
 - HMM-based regime detection for dynamic factor weighting
+- ML Alpha Enhancement (SHAP, Constrained GBM, Residual Alpha, Online Regime, Supply Chain)
 """
 
 from sqlalchemy.orm import Session
@@ -29,7 +30,7 @@ from quant.features.capital_flow import CapitalFlowFactor
 from quant.rotation import AdvancedRotationFactor
 from quant.regime.hmm import RegimeDetector, DynamicFactorWeights
 from datetime import date
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import pandas as pd
 import numpy as np
 import json
@@ -41,12 +42,27 @@ from core.error_handler import handle_gracefully, with_retry
 from core.rate_limiter import get_yfinance_rate_limiter
 from config.quant_config import get_factor_config, FactorConfig
 
+# ML Alpha Enhancement imports
+from config.ml_enhancement_config import get_ml_enhancement_config, MLEnhancementConfig
+from quant.mlops.signal_blender import MLSignalBlender, create_ml_signal_blender
+from quant.mlops.shap_attributor import SHAPAttributor, SHAPAttribution
+from quant.mlops.constrained_gbm import ConstrainedGBM
+from quant.mlops.residual_alpha import ResidualAlphaModel
+from quant.regime.online_hmm import OnlineRegimeDetector
+from quant.features.supply_chain_gnn import SupplyChainGraph, SupplyChainMomentum
+
 logger = get_structured_logger("RankingEngine")
 
 
 
 class RankingEngine:
     """Multi-factor stock ranking engine with regime-adaptive weighting.
+    
+    Features:
+        - Traditional factor scoring (VSM, BAB, QMJ, etc.)
+        - ML Alpha Enhancement (SHAP, GBM, Residual Alpha)
+        - Regime-aware dynamic weighting
+        - Signal blending with graceful degradation
     
     Uses FactorConfig for factor weights and RateLimiter for API calls.
     """
@@ -100,6 +116,10 @@ class RankingEngine:
         # Regime Detection
         self.regime_detector = RegimeDetector(n_states=2, lookback=252)
         self.current_regime = "Unknown"
+        
+        # --- ML Alpha Enhancement Modules ---
+        self.ml_config = get_ml_enhancement_config()
+        self._init_ml_enhancement_modules()
 
     async def run_ranking(self, ranking_date: date) -> Optional[pd.DataFrame]:
         """Run the ranking process for the given date.
@@ -428,7 +448,8 @@ class RankingEngine:
         # Note: process_factors creates 'z_{factor}' and 'z_{factor}_neutral'
         # We use neutralized scores for best results
         
-        df['score'] = (
+        # Traditional factor score
+        traditional_score = (
             weights['vsm'] * df.get('z_volatility_scaled_momentum_neutral', 0) +
             weights['bab'] * df.get('z_betting_against_beta_neutral', 0) +
             weights['qmj'] * df.get('quality', 0) +
@@ -439,6 +460,35 @@ class RankingEngine:
             weights.get('capital_flow', 0) * df.get('z_capital_flow_neutral', df.get('capital_flow', 0)) +
             weights.get('advanced_rotation', 0) * df.get('z_advanced_rotation_neutral', df.get('advanced_rotation', 0))
         ).fillna(0.0)
+        
+        df['traditional_score'] = traditional_score
+        
+        # --- ML Alpha Enhancement ---
+        # Blend ML signals with traditional factors
+        ml_result = await self._compute_ml_enhanced_score(df, ranking_date)
+        
+        if ml_result is not None:
+            # Merge ML blended score
+            df = df.merge(
+                ml_result[['ticker', 'blended_score', 'ml_contribution']],
+                on='ticker',
+                how='left'
+            )
+            # Final score: 60% traditional + 40% ML
+            df['score'] = (
+                0.6 * df['traditional_score'] + 
+                0.4 * df['blended_score'].fillna(0)
+            ).fillna(df['traditional_score'])
+            
+            logger.info(
+                f"🤖 ML Enhancement applied: {ml_result['blended_score'].notna().sum()} stocks enhanced"
+            )
+        else:
+            # Fallback to traditional score only
+            df['score'] = df['traditional_score']
+            df['blended_score'] = 0.0
+            df['ml_contribution'] = 0.0
+            logger.info("⚠️ ML Enhancement disabled or failed, using traditional scores")
         
         # Rank
         df['rank'] = df['score'].rank(ascending=False, method='first')
@@ -492,7 +542,11 @@ class RankingEngine:
                 'rsl': row.get('rsl', 1.0),
                 'mrs_signal': row.get('mrs_signal', 'lagging'),
                 'volume_pattern': row.get('volume_pattern', 'neutral'),
-                'z_advanced_rotation': row.get('z_advanced_rotation_neutral', row.get('advanced_rotation', 0))
+                'z_advanced_rotation': row.get('z_advanced_rotation_neutral', row.get('advanced_rotation', 0)),
+                # ML Alpha Enhancement
+                'traditional_score': row.get('traditional_score', 0),
+                'blended_score': row.get('blended_score', 0),
+                'ml_contribution': row.get('ml_contribution', 0),
             }
             
             signals_data.append({
@@ -508,4 +562,203 @@ class RankingEngine:
         result = store.write_signals(ranking_date, 'ranking_v3', signals_df)
         
         logger.info(f"Stored {result['rows_written']} ranking_v3 signals to Parquet (Regime: {self.current_regime}).")
+
+    def _init_ml_enhancement_modules(self) -> None:
+        """Initialize ML Alpha Enhancement modules based on configuration.
+        
+        Modules are initialized lazily and gracefully - if one fails,
+        others will still work. All modules respect the enabled flag
+        in MLEnhancementConfig.
+        """
+        active_features = self.ml_config.get_active_features()
+        logger.info(f"🧠 Initializing ML Enhancement modules: {active_features}")
+        
+        # MLSignalBlender (always initialize - handles disabled features internally)
+        self.ml_signal_blender: Optional[MLSignalBlender] = None
+        self.constrained_gbm: Optional[ConstrainedGBM] = None
+        self.residual_alpha_model: Optional[ResidualAlphaModel] = None
+        self.online_regime_detector: Optional[OnlineRegimeDetector] = None
+        self.supply_chain_momentum: Optional[SupplyChainMomentum] = None
+        self.shap_attributor: Optional[SHAPAttributor] = None
+        
+        # Track last SHAP attributions for storage
+        self._last_shap_attributions: List[SHAPAttribution] = []
+        
+        try:
+            # Initialize Signal Blender
+            self.ml_signal_blender = create_ml_signal_blender(normalization='robust')
+            
+            # Initialize Constrained GBM (used in ResidualAlpha)
+            if self.ml_config.constrained_gbm.enabled:
+                gbm_config = self.ml_config.constrained_gbm
+                feature_names = self.ml_config.residual_alpha.residual_features
+                self.constrained_gbm = ConstrainedGBM(
+                    feature_names=feature_names,
+                    monotonic_constraints=gbm_config.monotonic_constraints,
+                    num_leaves=gbm_config.num_leaves,
+                    learning_rate=gbm_config.learning_rate
+                )
+                logger.info("✅ ConstrainedGBM initialized")
+            
+            # Initialize Residual Alpha Model
+            if self.ml_config.residual_alpha.enabled and self.constrained_gbm is not None:
+                ra_config = self.ml_config.residual_alpha
+                self.residual_alpha_model = ResidualAlphaModel(
+                    linear_factors=ra_config.linear_factors,
+                    residual_features=ra_config.residual_features,
+                    ml_model=self.constrained_gbm
+                )
+                logger.info("✅ ResidualAlphaModel initialized")
+            
+            # Initialize Online Regime Detector
+            if self.ml_config.online_learning.enabled:
+                ol_config = self.ml_config.online_learning
+                self.online_regime_detector = OnlineRegimeDetector(
+                    n_states=2,
+                    decay_factor=ol_config.decay_factor,
+                    state_file=ol_config.state_file
+                )
+                logger.info("✅ OnlineRegimeDetector initialized")
+            
+            # Initialize Supply Chain Momentum (disabled by default)
+            if self.ml_config.supply_chain.enabled:
+                sc_config = self.ml_config.supply_chain
+                if sc_config.data_file:
+                    try:
+                        graph = SupplyChainGraph.from_csv(sc_config.data_file)
+                        self.supply_chain_momentum = SupplyChainMomentum(
+                            graph=graph,
+                            decay_factor=sc_config.decay_factor,
+                            propagation_steps=sc_config.propagation_steps
+                        )
+                        logger.info(f"✅ SupplyChainMomentum initialized with {graph.get_edge_count()} edges")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to load supply chain data: {e}")
+                else:
+                    logger.info("ℹ️ Supply chain disabled: no data file configured")
+            
+        except Exception as e:
+            logger.error(f"❌ ML Enhancement initialization error: {e}")
+            # Continue without ML enhancement - graceful degradation
+
+    async def _compute_ml_enhanced_score(
+        self,
+        df: pd.DataFrame,
+        ranking_date: date
+    ) -> Optional[pd.DataFrame]:
+        """Compute ML-enhanced scores using all available ML modules.
+        
+        Args:
+            df: DataFrame with traditional factor scores and raw features.
+            ranking_date: Current ranking date for logging.
+            
+        Returns:
+            DataFrame with blended ML scores, or None if ML is disabled/failed.
+        """
+        # Check if any ML feature is enabled
+        if not self.ml_config.get_active_features():
+            return None
+        
+        if self.ml_signal_blender is None:
+            return None
+        
+        tickers = df['ticker'].tolist()
+        
+        try:
+            # 1. Prepare signals dict for blender
+            ml_signals: Dict[str, pd.Series] = {}
+            
+            # 2. Online Regime Detection
+            regime_probs: Optional[Tuple[str, np.ndarray]] = None
+            if self.online_regime_detector is not None:
+                # Update with latest market return
+                spy_return = df['momentum'].mean() if 'momentum' in df.columns else 0.0
+                self.online_regime_detector.update(spy_return)
+                regime_probs = self.online_regime_detector.get_regime()
+                logger.debug(f"Online regime: {regime_probs[0]}")
+            
+            # 3. Residual Alpha (requires trained model)
+            residual_alphas: Optional[pd.Series] = None
+            if self.residual_alpha_model is not None:
+                try:
+                    # Prepare linear and residual feature matrices
+                    linear_config = self.ml_config.residual_alpha.linear_factors
+                    residual_config = self.ml_config.residual_alpha.residual_features
+                    
+                    # Map config factor names to DataFrame columns
+                    linear_cols = [c for c in linear_config if c in df.columns]
+                    residual_cols = [c for c in residual_config if c in df.columns]
+                    
+                    if linear_cols and residual_cols:
+                        X_linear = df[linear_cols].fillna(0)
+                        X_residual = df[residual_cols].fillna(0)
+                        
+                        # Use traditional score as target for training
+                        y = df['traditional_score']
+                        
+                        # Fit and predict (incremental refit each run)
+                        self.residual_alpha_model.fit(X_linear, X_residual, y)
+                        total, linear, residual = self.residual_alpha_model.predict(X_linear, X_residual)
+                        
+                        residual_alphas = pd.Series(residual, index=tickers)
+                        ml_signals['residual'] = residual_alphas
+                        
+                        logger.debug(f"Residual alpha range: [{residual.min():.3f}, {residual.max():.3f}]")
+                
+                except Exception as e:
+                    logger.warning(f"Residual alpha computation failed: {e}")
+            
+            # 4. GBM Predictions (direct prediction without residual decomposition)
+            gbm_predictions: Optional[pd.Series] = None
+            if self.constrained_gbm is not None and self.constrained_gbm.model is not None:
+                try:
+                    # Use all available features for prediction
+                    feature_cols = [c for c in self.constrained_gbm.feature_names if c in df.columns]
+                    if feature_cols:
+                        X_pred = df[feature_cols].fillna(0)
+                        preds = self.constrained_gbm.predict(X_pred)
+                        gbm_predictions = pd.Series(preds, index=tickers)
+                        ml_signals['gbm'] = gbm_predictions
+                except Exception as e:
+                    logger.warning(f"GBM prediction failed: {e}")
+            
+            # 5. Supply Chain Momentum
+            supply_chain_scores: Optional[pd.Series] = None
+            if self.supply_chain_momentum is not None:
+                try:
+                    # Get price changes from momentum column
+                    price_changes = df.set_index('ticker')['momentum'].to_dict()
+                    sc_scores = self.supply_chain_momentum.compute(price_changes, tickers)
+                    supply_chain_scores = pd.Series(sc_scores)
+                    ml_signals['supply_chain'] = supply_chain_scores
+                except Exception as e:
+                    logger.warning(f"Supply chain computation failed: {e}")
+            
+            # 6. Blend all signals
+            result = self.ml_signal_blender.blend(
+                tickers=tickers,
+                shap_attributions=self._last_shap_attributions,  # From previous training
+                gbm_predictions=gbm_predictions,
+                residual_alphas=residual_alphas,
+                regime_probs=regime_probs,
+                supply_chain_scores=supply_chain_scores,
+                existing_scores=pd.Series(df['traditional_score'].values, index=tickers)
+            )
+            
+            # Add ML contribution metric
+            result['ml_contribution'] = result['blended_score'] - result.get('traditional_score', 0)
+            
+            # Log diagnostic info
+            diag = self.ml_signal_blender.get_diagnostic_info()
+            logger.info(
+                f"🔬 ML Blend: regime={diag['regime']}, "
+                f"active_signals={diag['active_signals']}"
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"ML enhanced score computation failed: {e}")
+            return None
+
 

@@ -14,6 +14,14 @@ A production-ready, institutional-grade quantitative trading platform implementi
     - [1.1 Overview](#11-overview)
     - [1.2 Key Capabilities](#12-key-capabilities)
     - [1.3 Technology Stack](#13-technology-stack)
+    - [1.4 Theoretical Framework](#14-theoretical-framework)
+      - [1.4.1 HMM Regime Detection](#141-hidden-markov-model-hmm-regime-detection)
+      - [1.4.2 Multivariate Kelly Criterion](#142-multivariate-kelly-criterion)
+      - [1.4.3 Hierarchical Risk Parity](#143-hierarchical-risk-parity-hrp)
+      - [1.4.4 Black-Litterman Model](#144-black-litterman-model)
+      - [1.4.5 Component VaR Decomposition](#145-component-var-decomposition)
+      - [1.4.6 Triple Barrier Labeling](#146-triple-barrier-labeling)
+      - [1.4.7 Money Flow Indicators](#147-money-flow-indicators)
   - [2. System Architecture](#2-system-architecture)
     - [2.1 High-Level Architecture](#21-high-level-architecture)
     - [2.2 Data Flow Pipeline](#22-data-flow-pipeline)
@@ -67,6 +75,12 @@ A production-ready, institutional-grade quantitative trading platform implementi
     - [6.2 Parquet Schemas](#62-parquet-schemas)
       - [Signals Schema](#signals-schema)
       - [Targets Schema](#targets-schema)
+    - [6.3 Data Pipeline](#63-data-pipeline)
+      - [6.3.1 Expected Input Data Formats](#631-expected-input-data-formats)
+      - [6.3.2 Data Lake Directory Structure](#632-data-lake-directory-structure)
+      - [6.3.3 Data Validation Pipeline](#633-data-validation-pipeline)
+      - [6.3.4 Smart Catch-Up Service](#634-smart-catch-up-service)
+      - [6.3.5 Signal Store Format](#635-signal-store-format)
   - [7. Operational Guide](#7-operational-guide)
     - [7.1 Daily Operations](#71-daily-operations)
       - [7.1.1 Daily Update Workflow](#711-daily-update-workflow)
@@ -87,6 +101,14 @@ A production-ready, institutional-grade quantitative trading platform implementi
     - [9.1 Test Categories](#91-test-categories)
     - [9.2 Running Tests](#92-running-tests)
     - [9.3 Key Test Cases](#93-key-test-cases)
+    - [9.4 Property-Based Testing (Hypothesis)](#94-property-based-testing-hypothesis)
+      - [9.4.1 Running Property Tests](#941-running-property-tests)
+      - [9.4.2 Property Test Categories](#942-property-test-categories)
+      - [9.4.3 Understanding Property Test Output](#943-understanding-property-test-output)
+      - [9.4.4 Key Property Definitions](#944-key-property-definitions)
+      - [9.4.5 Hypothesis Profiles](#945-hypothesis-profiles)
+      - [9.4.6 Custom Data Generators](#946-custom-data-generators)
+    - [9.5 Test Coverage](#95-test-coverage)
   - [10. Performance Considerations](#10-performance-considerations)
     - [10.1 DuckDB Query Optimization](#101-duckdb-query-optimization)
     - [10.2 Price Cache Strategy](#102-price-cache-strategy)
@@ -110,7 +132,7 @@ A production-ready, institutional-grade quantitative trading platform implementi
 
 ### 1.1 Overview
 
-The DCA Quant Backend is a **three-tier quantitative trading engine** designed for systematic equity selection, portfolio construction, and risk-aware execution. The system has evolved through three maturity tiers:
+The DCA Quant Backend is a **three-tier quantitative trading engine** designed for systematic equity selection, portfolio construction, and risk-aware execution. The system has evolved through multiple maturity tiers:
 
 | Tier | Focus | Key Capabilities |
 |------|-------|------------------|
@@ -118,11 +140,14 @@ The DCA Quant Backend is a **three-tier quantitative trading engine** designed f
 | **Tier-2** | Portfolio Construction | Kelly criterion, volatility targeting, Black-Litterman |
 | **Tier-3** | Production Infrastructure | Ray distributed computing, MLflow tracking, real-time streaming |
 | **Phase-3** | Operational Resilience | Health endpoints, circuit breaker, data freshness, Alembic migrations |
+| **ML-Alpha** | ML Enhancement | SHAP attribution, Constrained GBM, Residual Alpha, Online Regime, Supply Chain GNN |
 
 ### 1.2 Key Capabilities
 
-- **Alpha Generation**: 8+ academically-validated factors (VSM, BAB, QMJ, PEAD, Sentiment)
-- **Regime Awareness**: Hidden Markov Model for Bull/Bear classification with dynamic factor weighting
+- **Alpha Generation**: 10+ academically-validated factors (VSM, BAB, QMJ, PEAD, Sentiment, Capital Flow, Advanced Rotation)
+- **Regime Awareness**: Hidden Markov Model + Online Regime Detection for dynamic factor weighting
+- **ML Alpha Enhancement**: SHAP factor attribution, Constrained GBM with monotonic constraints, Residual Alpha modeling
+- **Capital Flow Detection**: MFI, OBV, RS Ratio/Momentum, price-volume divergence detection
 - **Portfolio Optimization**: HRP, Black-Litterman, and Multivariate Kelly with sector/beta constraints
 - **Risk Management**: Component VaR decomposition, tail hedging via OTM puts
 - **Execution**: VWAP scheduling with market impact estimation
@@ -137,11 +162,161 @@ The DCA Quant Backend is a **three-tier quantitative trading engine** designed f
 | **API** | FastAPI, Pydantic, Uvicorn |
 | **Data** | DuckDB, Parquet, SQLAlchemy, YFinance |
 | **Computation** | NumPy, Pandas, SciPy, CVXPY |
-| **ML** | XGBoost, Scikit-learn, SHAP, DEAP |
+| **ML** | XGBoost, LightGBM, Scikit-learn, SHAP, DEAP |
 | **Infrastructure** | Ray, MLflow, Redis, WebSockets |
 | **Configuration** | Pydantic Settings, Alembic, python-dotenv |
 
----
+### 1.4 Theoretical Framework
+
+This section provides a mathematical foundation for the key algorithms used in the system.
+
+#### 1.4.1 Hidden Markov Model (HMM) Regime Detection
+
+The system uses a 2-state Gaussian HMM to classify market regimes:
+
+**Model Specification:**
+- **States**: S = {Bull (s₀), Bear (s₁)}
+- **Emissions**: Returns ~ N(μₛ, σₛ²) where parameters differ by state
+- **Transitions**: A[i,j] = P(Sₜ = j | Sₜ₋₁ = i)
+
+**State Identification:**
+```
+Score(s) = μₛ - 0.5 × σₛ²
+Bull = argmax(Score), Bear = argmin(Score)
+```
+
+**Inference**: Viterbi algorithm decodes hidden state sequence, posterior probabilities via forward-backward.
+
+#### 1.4.2 Multivariate Kelly Criterion
+
+Maximizes geometric growth rate using convex optimization:
+
+**Objective Function:**
+```
+max g(w) ≈ r + w'(μ - r) - ½ w'Σw
+```
+
+Where:
+- w = weight vector
+- μ = expected returns vector  
+- Σ = covariance matrix
+- r = risk-free rate
+
+**Constraints:**
+- Gross leverage: Σ|wᵢ| ≤ L_max
+- Long-only: wᵢ ≥ 0
+- Sector limits: Σⱼ∈sector wⱼ ≤ sector_limit
+- Beta targeting: |w'β - β_target| ≤ tolerance
+
+**Fractional Kelly**: Final weights = w* × f (typically f=0.5 for "Half-Kelly")
+
+#### 1.4.3 Hierarchical Risk Parity (HRP)
+
+Lopez de Prado (2016) algorithm avoiding matrix inversion:
+
+**Step 1 - Tree Clustering:**
+```
+d(i,j) = √(½(1 - ρᵢⱼ))  # Distance from correlation
+Dendrogram: Single-linkage clustering on distance matrix
+```
+
+**Step 2 - Quasi-Diagonalization:**
+```
+Reorder assets: Assets close in dendrogram → adjacent in covariance matrix
+```
+
+**Step 3 - Recursive Bisection:**
+```
+For each cluster split [L, R]:
+  Var_L = w'_L Σ_L w_L  (cluster variance via IVP weights)
+  Var_R = w'_R Σ_R w_R
+  α = 1 - Var_L / (Var_L + Var_R)
+  
+  w[L] *= α
+  w[R] *= (1 - α)
+```
+
+#### 1.4.4 Black-Litterman Model
+
+Combines market equilibrium with alpha views:
+
+**Prior (Equilibrium Returns):**
+```
+π = δ × Σ × w_mkt
+```
+Where δ = risk aversion, w_mkt = market cap weights
+
+**Views:**
+```
+Q = IC × σ × Z  (Grinold-Kahn mapping)
+P = Identity matrix (one view per asset)
+Ω = diag(σᵢ² / |Zᵢ|)  (uncertainty)
+```
+
+**Posterior:**
+```
+E[R] = [(τΣ)⁻¹ + P'Ω⁻¹P]⁻¹ × [(τΣ)⁻¹π + P'Ω⁻¹Q]
+```
+
+#### 1.4.5 Component VaR Decomposition
+
+Decomposes portfolio VaR into asset contributions:
+
+**Portfolio VaR:**
+```
+VaR_p = z_α × σ_p × Value
+σ_p = √(w'Σw)
+```
+
+**Marginal VaR:**
+```
+MVaR = ∂VaR/∂w = z_α × (Σw) / σ_p
+```
+
+**Component VaR:**
+```
+CVaR_i = wᵢ × MVaRᵢ × Value
+Σᵢ CVaRᵢ = VaR_p  (additive decomposition)
+```
+
+#### 1.4.6 Triple Barrier Labeling
+
+Path-dependent labeling for ML training:
+
+**Barriers:**
+1. **Upper (Profit Take)**: Price reaches +pt × σ
+2. **Lower (Stop Loss)**: Price reaches -sl × σ  
+3. **Vertical (Time)**: Holding period expires
+
+**Labels:**
+| First Touch | Label | Interpretation |
+|-------------|-------|----------------|
+| Upper | +1 | Signal succeeded |
+| Lower | -1 | Signal failed |
+| Vertical | 0 | Inconclusive |
+
+#### 1.4.7 Money Flow Indicators
+
+**Money Flow Index (MFI):**
+```
+Typical Price = (H + L + C) / 3
+Raw MF = Typical Price × Volume
+MFI = 100 × (Positive MF / (Positive MF + Negative MF))
+```
+
+**RS Ratio (Sector Rotation):**
+```
+RS_ratio = SMA₁₄(Sector / Benchmark) × 100
+RS_momentum = ROC₁₄(RS_ratio)
+```
+
+**Quadrant Classification:**
+| RS Ratio | RS Momentum | Quadrant |
+|----------|-------------|----------|
+| ≥ 100 | ≥ 0 | Leading |
+| ≥ 100 | < 0 | Weakening |
+| < 100 | < 0 | Lagging |
+| < 100 | ≥ 0 | Improving |
 
 ## 2. System Architecture
 
@@ -682,7 +857,7 @@ if report.drop_rate > 0.10:
 
 #### 4.2.1 Factor Zoo
 
-The system implements 8+ academically-validated alpha factors:
+The system implements 12+ academically-validated alpha factors:
 
 | Factor | Module | Description | Reference |
 |--------|--------|-------------|-----------|
@@ -694,6 +869,8 @@ The system implements 8+ academically-validated alpha factors:
 | **Accruals** | `accruals.py` | Accruals Anomaly | Sloan (1996) |
 | **IVOL** | `ivol.py` | Idiosyncratic Volatility | Ang et al. (2006) |
 | **Revisions** | `revisions.py` | Analyst Estimate Revisions | Chan et al. (1996) |
+| **Capital Flow** | `capital_flow/` | MFI, OBV, RS Ratio/Momentum, Divergence | Money Flow Analysis |
+| **Advanced Rotation** | `rotation.py` | Levy RSL, Mansfield RS, Volume Structure | Sector Rotation |
 | **Fundamental** | `fundamental.py` | Fundamental factors | Various |
 | **Technical** | `technical.py` | Technical indicators | Various |
 
@@ -2003,7 +2180,159 @@ class Fundamentals(Base):
 | `weight` | float64 | Portfolio weight |
 | `model_name` | string | Optimizer identifier |
 
----
+### 6.3 Data Pipeline
+
+#### 6.3.1 Expected Input Data Formats
+
+**OHLCV Price Data (Parquet):**
+
+The system expects price data in the following Pandera-validated schema:
+
+```python
+# Required columns (quant/data/integrity/schema.py)
+columns = ['ticker', 'date', 'open', 'high', 'low', 'close', 'adj_close', 'volume']
+```
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `ticker` | string | Non-null, stock symbol |
+| `date` | datetime | Non-null, trading date |
+| `open` | float | > 0, opening price |
+| `high` | float | > 0, ≥ open, ≥ close |
+| `low` | float | > 0, ≤ open, ≤ close |
+| `close` | float | > 0, closing price |
+| `adj_close` | float | > 0, split/dividend adjusted |
+| `volume` | int | > 0, trading volume |
+
+**OHLCV Relationships Validated:**
+- High ≥ Low (always)
+- High ≥ Open AND High ≥ Close
+- Low ≤ Open AND Low ≤ Close
+
+**Fundamental Data Format:**
+
+Fundamentals are stored in long format with the following columns:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `ticker` | string | Stock symbol |
+| `date` | date | Report/as-of date |
+| `metric` | string | Metric name (e.g., 'revenue', 'ebitda', 'roe') |
+| `value` | float | Metric value |
+| `period` | string | Reporting period ('12M', 'Q', 'TTM') |
+
+**Supported Fundamental Metrics:**
+
+| Category | Metrics |
+|----------|---------|
+| Profitability | `roe`, `roa`, `gross_margin`, `operating_margin`, `net_margin` |
+| Valuation | `pe_ratio`, `pb_ratio`, `ps_ratio`, `ev_ebitda` |
+| Financial Health | `debt_to_equity`, `current_ratio`, `quick_ratio` |
+| Cash Flow | `fcf_yield`, `operating_cash_flow`, `capex` |
+| Growth | `revenue_growth`, `earnings_growth` |
+
+#### 6.3.2 Data Lake Directory Structure
+
+```
+data_lake/
+├── raw/                           # Raw ingested data
+│   ├── prices/                    # OHLCV parquet files
+│   │   ├── AAPL.parquet           # Per-ticker files
+│   │   ├── MSFT.parquet
+│   │   └── ...
+│   ├── fundamentals/              # Fundamental data
+│   │   └── fundamentals.parquet
+│   └── securities/                # Universe definitions
+│       └── universe.parquet
+│
+├── processed/                     # Computed outputs
+│   ├── factors/                   # Computed factor values
+│   │   └── factors_2024-12-10.parquet
+│   ├── signals/                   # Ranking signals
+│   │   └── ranking_v3_2024-12-10.parquet
+│   └── targets/                   # Portfolio targets
+│       └── kelly_v1_2024-12-10.parquet
+│
+├── validation_logs/               # Validation reports (JSON)
+│   └── validation_2024-12-10.json
+│
+├── experiments/                   # Backtest runs with lineage
+│   └── exp_001/
+│       ├── config.json
+│       ├── results.parquet
+│       └── metrics.json
+│
+└── snapshots/                     # Point-in-time data snapshots
+    └── snapshot_2024-12-10/
+```
+
+#### 6.3.3 Data Validation Pipeline
+
+The integrity module (`quant/data/integrity/`) provides multi-stage validation:
+
+| Stage | Checks | Action on Failure |
+|-------|--------|-------------------|
+| **Structural** | Required columns present, correct types | DROP row |
+| **Logical** | High≥Low, prices>0, volume>0 | DROP row |
+| **Temporal** | Missing business days detection | INTERPOLATE or WARN |
+| **Statistical** | Outliers (>5σ), price spikes (>50%) | Context-dependent |
+
+**Validation Context Modes:**
+- `DAILY`: Real-time ingestion, lenient spike handling (WARN)
+- `BACKFILL`: Historical data, strict spike handling (DROP confirmed spikes)
+
+```python
+# Usage example
+from quant.data.integrity import OHLCVValidator, ValidationContext
+
+validator = OHLCVValidator()
+report = validator.validate(df, context=ValidationContext.DAILY, lazy=True)
+
+if report.has_critical_issues:
+    logger.error(f"Critical issues: {report.critical_count}")
+if report.drop_rate > 0.10:
+    logger.warning(f"High drop rate: {report.drop_rate:.1%}")
+```
+
+#### 6.3.4 Smart Catch-Up Service
+
+On startup, the system automatically detects and fills data gaps:
+
+```python
+# app/core/startup.py
+
+async def smart_catchup():
+    """
+    1. Detect last data date per ticker
+    2. Identify gaps (missing business days)
+    3. Download missing data from YFinance
+    4. Validate with BACKFILL context
+    5. Append to Parquet files
+    """
+```
+
+#### 6.3.5 Signal Store Format
+
+Computed signals are stored with full metadata for reproducibility:
+
+```json
+{
+  "ticker": "NVDA",
+  "score": 2.45,
+  "rank": 1,
+  "metadata": {
+    "vsm": 1.8,
+    "bab": 0.5,
+    "qmj": 2.1,
+    "pead": 0.8,
+    "sentiment": 1.2,
+    "capital_flow": 0.6,
+    "regime": "Bull",
+    "traditional_score": 2.1,
+    "blended_score": 2.5,
+    "ml_contribution": 0.35
+  }
+}
 
 ## 7. Operational Guide
 
@@ -2273,6 +2602,149 @@ def test_purged_cv_no_leakage():
         
         assert train_end < test_start, "Look-ahead bias detected!"
 ```
+
+### 9.4 Property-Based Testing (Hypothesis)
+
+The project uses [Hypothesis](https://hypothesis.readthedocs.io/) for property-based testing, which generates randomized test inputs to verify mathematical invariants.
+
+#### 9.4.1 Running Property Tests
+
+```bash
+# Run all property tests
+pytest tests/test_*_properties.py -v
+
+# Run with more examples (thorough testing)
+pytest tests/test_capital_flow_properties.py -v --hypothesis-profile=ci
+
+# Run with verbose hypothesis output
+pytest tests/test_ml_enhancement_properties.py -v --hypothesis-verbosity=verbose
+
+# Debug a failing seed (when Hypothesis provides a seed)
+pytest tests/test_capital_flow_properties.py::TestMoneyFlowProperties::test_property5_mfi_range_constraint \
+    --hypothesis-seed=12345
+```
+
+#### 9.4.2 Property Test Categories
+
+| Test File | Module Tested | Key Properties |
+|-----------|---------------|----------------|
+| `test_capital_flow_properties.py` | Capital Flow Detection | MFI range [0,100], OBV direction, divergence scores |
+| `test_ml_enhancement_properties.py` | ML Alpha Enhancement | SHAP additivity, GBM monotonicity |
+| `test_validation_properties.py` | Data Validation | Schema completeness, round-trip serialization |
+| `test_advanced_rotation_properties.py` | Sector Rotation | RS ratio bounds, quadrant classification |
+
+#### 9.4.3 Understanding Property Test Output
+
+**Success Output:**
+```
+test_property5_mfi_range_constraint PASSED   [100 examples, 50 shrinks]
+```
+- `100 examples`: Number of random inputs tested
+- `50 shrinks`: Hypothesis simplified failing cases before reporting
+
+**Failure Output:**
+```
+test_property5_mfi_range_constraint FAILED
+Falsifying example: df=DataFrame({...})
+Explanation: MFI has values above 100: 101.5
+```
+- The `Falsifying example` shows the minimal input that breaks the property
+- Use `--hypothesis-seed=<seed>` to reproduce
+
+#### 9.4.4 Key Property Definitions
+
+**Capital Flow Properties (14 total):**
+
+| Property | Requirement | Expected Invariant |
+|----------|-------------|-------------------|
+| P1 | RS Ratio | Centered around 100 |
+| P2 | RS Momentum | Bounded rate of change |
+| P3 | Quadrant | Deterministic classification |
+| P4 | Transition | Lagging→Improving triggers signal |
+| P5 | MFI Range | Always in [0, 100] |
+| P6 | MFI Threshold | <20=oversold, >80=overbought |
+| P7 | OBV Direction | Matches price direction |
+| P8 | OBV Z-Score | Clipped to [-5, 5] |
+| P9 | Bullish Divergence | Lower price low + higher indicator low |
+| P10 | Divergence Score | Always in [-1, 1] |
+| P11 | Quadrant Score | Leading/Improving → positive |
+| P12 | Score Adjustment | Divergence modifies money_flow_score |
+| P13 | Serialization | JSON round-trip preserves data |
+| P14 | Completeness | All required fields in output |
+
+**Example Property Test:**
+```python
+@given(mfi_value=st.floats(min_value=0.0, max_value=100.0, allow_nan=False))
+@settings(max_examples=50)
+def test_property6_mfi_threshold_classification(self, mfi_value):
+    """Property 6: MFI threshold classification is correct."""
+    calc = MoneyFlowCalculator()
+    signal = calc.classify_mfi(mfi_value)
+    
+    if mfi_value < 20:
+        assert signal == 'oversold'
+    elif mfi_value > 80:
+        assert signal == 'overbought'
+    else:
+        assert signal == 'neutral'
+```
+
+#### 9.4.5 Hypothesis Profiles
+
+```python
+# tests/test_capital_flow_properties.py
+
+settings.register_profile("ci", max_examples=100, deadline=None)
+settings.register_profile("dev", max_examples=20, deadline=None)
+settings.load_profile("dev")  # Fast iteration during development
+```
+
+- **dev**: 20 examples, fast feedback (default)
+- **ci**: 100 examples, thorough coverage (use in CI/CD)
+
+To switch profiles:
+```bash
+pytest tests/ --hypothesis-profile=ci
+```
+
+#### 9.4.6 Custom Data Generators
+
+Property tests use composite strategies to generate realistic test data:
+
+```python
+@st.composite
+def valid_ohlcv_df(draw, min_rows=30, max_rows=100):
+    """Generate a valid OHLCV DataFrame."""
+    n_rows = draw(st.integers(min_value=min_rows, max_value=max_rows))
+    start_price = draw(st.floats(min_value=10.0, max_value=500.0))
+    
+    # Generate prices with random walk
+    dates = pd.date_range(end=datetime.now(), periods=n_rows, freq='D')
+    # ... realistic OHLCV generation ...
+    
+    return pd.DataFrame({
+        'Open': opens, 'High': highs, 'Low': lows,
+        'Close': closes, 'Volume': volumes
+    }, index=dates)
+```
+
+### 9.5 Test Coverage
+
+```bash
+# Generate HTML coverage report
+pytest tests/ --cov=quant --cov=app --cov=core --cov-report=html
+
+# View coverage
+open htmlcov/index.html
+```
+
+**Target Coverage:**
+| Module | Target | Current |
+|--------|--------|---------|
+| `quant/features/` | > 80% | ~85% |
+| `quant/portfolio/` | > 75% | ~78% |
+| `quant/data/integrity/` | > 90% | ~92% |
+| `app/api/` | > 70% | ~75% |
 
 ---
 

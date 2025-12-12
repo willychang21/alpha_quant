@@ -48,6 +48,21 @@ repos:
       - id: check-merge-conflict
       - id: debug-statements
 
+  # Security: Static analysis with Bandit
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.10
+    hooks:
+      - id: bandit
+        args: ['-c', '../.bandit', '-ll', '-r']
+        exclude: ^tests/
+
+  # Security: Secret leak detection with Gitleaks
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
 # Configuration
 default_language_version:
   python: python3.11
+

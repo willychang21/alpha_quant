@@ -1,0 +1,21 @@
+# Bandit configuration file (YAML)
+# https://bandit.readthedocs.io/en/latest/config.html
+
+# Skip specific checks:
+# B101: assert statements (used extensively in tests and validation)
+# B311: random module (acceptable for quant shuffling/sampling, not crypto)
+# B105: hardcoded password in function arg (false positives with default params)
+skips:
+  - B101
+  - B311
+  - B105
+
+# Directories to exclude from scanning
+exclude_dirs:
+  - tests
+  - .venv
+  - node_modules
+  - __pycache__
+  - data_lake
+  - mlruns
+  - .git
