@@ -103,7 +103,7 @@ def run_backtest(
     
     # 3. Run backtest
     logger.info("Running backtest...")
-    equity_curve = run_factor_backtest(prices, rebalance_dates, top_n=top_n)
+    equity_curve, trade_logs = run_factor_backtest(prices, rebalance_dates, top_n=top_n)
     
     if equity_curve.empty:
         logger.error("Backtest failed - no results generated")
@@ -130,9 +130,17 @@ def run_backtest(
     
     db.close()
     
+    # Save trades
+    if trade_logs:
+        trades_df = pd.DataFrame(trade_logs)
+        trades_path = f"data/exports/backtest_trades_{start_year}_{end_year}.csv"
+        trades_df.to_csv(trades_path, index=False)
+        logger.info(f"Trade logs saved to: {trades_path}")
+    
     return {
         'metrics': metrics,
-        'equity_curve': equity_curve.to_dict(orient='records')
+        'equity_curve': equity_curve.to_dict(orient='records'),
+        'trades': trade_logs
     }
 
 

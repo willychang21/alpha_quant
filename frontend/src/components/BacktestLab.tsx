@@ -13,7 +13,7 @@ import { motion } from 'framer-motion';
 import { 
     FlaskConical, TrendingUp, TrendingDown, Play, Loader2, 
     ChevronDown, ChevronUp, Plus, X, BarChart3, RefreshCw, DollarSign,
-    Shield, AlertTriangle, CheckCircle, Target
+    Shield, AlertTriangle, CheckCircle, Target, History
 } from 'lucide-react';
 
 interface BacktestMetrics {
@@ -35,6 +35,16 @@ interface RollingSharpePoint { date: string; rolling_sharpe: number; }
 interface MonthlyReturn { year: number; month: number; return: number; }
 interface SubperiodResult { year: number; return: number; volatility: number; sharpe: number; max_drawdown: number; }
 
+interface TradeRecord {
+    date: string;
+    ticker: string;
+    action: string;
+    reason: string;
+    price: number;
+    weight_change: number;
+    return?: number;
+}
+
 interface BacktestResult {
     strategy: {
         name: string;
@@ -51,6 +61,7 @@ interface BacktestResult {
         bootstrap_sharpe: { mean: number; lower_95: number; upper_95: number; std: number; };
         subperiod: SubperiodResult[];
     };
+    trades?: TradeRecord[];
     risk_controls?: { max_position: string; sector_cap: string; stop_loss: string; min_holding: string; };
     period: string;
     transaction_cost_bps?: number;
@@ -130,6 +141,59 @@ const MonthlyReturnHeatmap: React.FC<{ data: MonthlyReturn[] }> = ({ data }) => 
     );
 };
 
+const TradeHistoryTable: React.FC<{ trades: TradeRecord[] }> = ({ trades }) => {
+    const [page, setPage] = useState(1);
+    const itemsPerPage = 10;
+    const totalPages = Math.ceil(trades.length / itemsPerPage);
+    
+    const displayedTrades = trades.slice((page - 1) * itemsPerPage, page * itemsPerPage);
+    
+    return (
+        <div className="space-y-4">
+            <div className="overflow-x-auto rounded-md border">
+                <table className="w-full text-sm">
+                    <thead className="bg-muted/50 text-muted-foreground">
+                        <tr>
+                            <th className="p-3 text-left font-medium">Date</th>
+                            <th className="p-3 text-left font-medium">Ticker</th>
+                            <th className="p-3 text-center font-medium">Action</th>
+                            <th className="p-3 text-right font-medium">Price</th>
+                            <th className="p-3 text-right font-medium">Weight Δ</th>
+                            <th className="p-3 text-left font-medium">Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {displayedTrades.map((t, idx) => (
+                            <tr key={idx} className="border-t hover:bg-muted/10">
+                                <td className="p-3">{new Date(t.date).toLocaleDateString()}</td>
+                                <td className="p-3 font-medium">{t.ticker}</td>
+                                <td className="p-3 text-center">
+                                    <Badge variant="outline" className={t.action === 'BUY' ? 'border-green-500 text-green-500 bg-green-500/10' : 'border-red-500 text-red-500 bg-red-500/10'}>
+                                        {t.action}
+                                    </Badge>
+                                </td>
+                                <td className="p-3 text-right">${t.price.toFixed(2)}</td>
+                                <td className="p-3 text-right text-muted-foreground">{(t.weight_change * 100).toFixed(1)}%</td>
+                                <td className="p-3 text-muted-foreground text-xs">{t.reason}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+            
+            {totalPages > 1 && (
+                <div className="flex justify-between items-center text-xs text-muted-foreground">
+                    <div>Showing {(page - 1) * itemsPerPage + 1}-{Math.min(page * itemsPerPage, trades.length)} of {trades.length} trades</div>
+                    <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>Previous</Button>
+                        <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>Next</Button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
 const BacktestLab: React.FC = () => {
     const [result, setResult] = useState<BacktestResult | null>(null);
     const [loading, setLoading] = useState(false);
@@ -145,6 +209,7 @@ const BacktestLab: React.FC = () => {
     const [showRollingSharpe, setShowRollingSharpe] = useState(true);
     const [showHeatmap, setShowHeatmap] = useState(true);
     const [showTurnover, setShowTurnover] = useState(false);
+    const [showTrades, setShowTrades] = useState(false);
     const [showGrossCurve, setShowGrossCurve] = useState(false);
 
     const runBacktest = async () => {
@@ -503,6 +568,23 @@ const BacktestLab: React.FC = () => {
                                             </BarChart>
                                         </ResponsiveContainer>
                                     </div>
+                                </CardContent>
+                            )}
+                        </Card>
+                    )}
+
+                    {/* Trade History */}
+                    {result.trades && result.trades.length > 0 && (
+                        <Card>
+                            <CardHeader className="cursor-pointer" onClick={() => setShowTrades(!showTrades)}>
+                                <CardTitle className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2"><History className="w-5 h-5 text-blue-500" />Trade History</div>
+                                    {showTrades ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                </CardTitle>
+                            </CardHeader>
+                            {showTrades && (
+                                <CardContent>
+                                    <TradeHistoryTable trades={result.trades} />
                                 </CardContent>
                             )}
                         </Card>

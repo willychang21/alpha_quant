@@ -362,7 +362,7 @@ def run_backtest(
             freq='ME'
         ).tolist()
         
-        equity_curve = run_factor_backtest(prices_df, rebalance_dates, top_n=top_n)
+        equity_curve, trade_logs = run_factor_backtest(prices_df, rebalance_dates, top_n=top_n)
         
         if equity_curve.empty:
             return {"error": "Backtest failed - insufficient data"}
@@ -512,6 +512,7 @@ def run_backtest(
             },
             "period": f"{start_year}-{end_year}",
             "transaction_cost_bps": 10,
+            "trades": trade_logs,
             "generated_at": datetime.now().isoformat()
         }
         

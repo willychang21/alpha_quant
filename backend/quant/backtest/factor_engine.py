@@ -242,17 +242,19 @@ def check_stop_loss(
     holdings: Dict[str, float],
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
-    threshold: float
-) -> Tuple[Dict[str, float], List[str]]:
+    threshold: float,
+    current_prices: Optional[pd.Series] = None
+) -> Tuple[Dict[str, float], List[Dict]]:
     """
     Check for stop loss triggers within the period.
-    Returns updated holdings and list of stopped out tickers.
+    Returns updated holdings and list of trade records for stopped out positions.
     """
-    stopped_out = []
+    stopped_trades = []
+    stopped_tickers = []
     
     period_returns = returns.loc[start_date:end_date]
     if period_returns.empty:
-        return holdings, stopped_out
+        return holdings, stopped_trades
     
     for ticker in list(holdings.keys()):
         if ticker not in period_returns.columns:
@@ -262,18 +264,44 @@ def check_stop_loss(
         cum_return = (1 + period_returns[ticker]).cumprod() - 1
         
         # Check if any point hit stop loss
-        if (cum_return <= threshold).any():
-            stopped_out.append(ticker)
+        hit_stop = cum_return[cum_return <= threshold]
+        
+        if not hit_stop.empty:
+            stop_date = hit_stop.index[0]
+            loss_pct = hit_stop.iloc[0]
+            
+            stopped_tickers.append(ticker)
+            
+            # Log Trade
+            price = 0.0
+            if current_prices is not None and ticker in current_prices:
+                # Estimate stop price based on start price * (1 + loss)
+                # Ideally we'd have daily price data here, but for now approximate
+                # Using the price at the start of the period is the best proxy we have passed in efficiently,
+                # but better would be to use the actual stop event day.
+                # However, to keep it simple, we log the event.
+                start_price = current_prices.get(ticker, 0)
+                price = start_price * (1 + loss_pct)
+
+            stopped_trades.append({
+                "date": stop_date,
+                "ticker": ticker,
+                "action": "SELL",
+                "reason": "Hard Stop Loss (-15%)",
+                "price": price, 
+                "weight": holdings[ticker],
+                "return": loss_pct
+            })
     
     # Remove stopped positions
-    remaining = {k: v for k, v in holdings.items() if k not in stopped_out}
+    remaining = {k: v for k, v in holdings.items() if k not in stopped_tickers}
     
     # Redistribute weights
     total = sum(remaining.values())
     if total > 0:
         remaining = {k: v / total for k, v in remaining.items()}
     
-    return remaining, stopped_out
+    return remaining, stopped_trades
 
 
 def calculate_turnover(old: Dict[str, float], new: Dict[str, float]) -> float:
@@ -287,9 +315,10 @@ def run_factor_backtest(
     rebalance_dates: List[pd.Timestamp],
     top_n: int = 50,
     config: Optional[RiskControlConfig] = None
-) -> pd.DataFrame:
+) -> Tuple[pd.DataFrame, List[Dict]]:
     """
     Run professional factor backtest with risk controls.
+    Returns (Equity Curve DataFrame, Trade Logs List)
     """
     if config is None:
         config = RiskControlConfig()
@@ -297,14 +326,20 @@ def run_factor_backtest(
     engine = PointInTimeFactorEngine(prices_df)
     
     results = []
+    trade_logs = []
+    
     holdings = {}          # ticker -> weight
     holding_periods = {}   # ticker -> months held
     portfolio_gross = 1.0
     portfolio_net = 1.0
     cumulative_costs = 0.0
     total_stop_losses = 0
+    current_equity = 1.0 # Normalized 
     
     for i, date in enumerate(rebalance_dates):
+        # 0. Get Prices for this date (for trade logging)
+        current_prices_row = engine.prices.loc[date] if date in engine.prices.index else pd.Series()
+        
         # 1. Calculate factor scores
         factors = engine.calculate_factors_at_date(date)
         
@@ -313,6 +348,29 @@ def run_factor_backtest(
         
         # 2. Apply risk controls to get new weights
         new_holdings = apply_risk_controls(factors, holding_periods, top_n, config)
+        
+        # --- LOG REBALANCE TRADES ---
+        all_tickers = set(holdings.keys()) | set(new_holdings.keys())
+        for ticker in all_tickers:
+            old_w = holdings.get(ticker, 0)
+            new_w = new_holdings.get(ticker, 0)
+            diff = new_w - old_w
+            
+            if abs(diff) > 1e-4: # Tolerance
+                action = "BUY" if diff > 0 else "SELL"
+                price = current_prices_row.get(ticker, 0) if not current_prices_row.empty else 0
+                
+                trade_logs.append({
+                    "date": date,
+                    "ticker": ticker,
+                    "action": action,
+                    "reason": "Rebalance",
+                    "price": price,
+                    "weight_change": round(diff, 4),
+                    "portfolio_impact": round(diff * current_equity, 2) 
+                    # Note: portfolio_impact is abstract if we don't have absolute $$
+                })
+        # -----------------------------
         
         # 3. Calculate turnover and costs
         turnover = calculate_turnover(holdings, new_holdings)
@@ -324,10 +382,13 @@ def run_factor_backtest(
             next_date = rebalance_dates[i + 1]
             
             # Check for stop losses
-            active_holdings, stopped = check_stop_loss(
-                engine.returns, new_holdings, date, next_date, config.stop_loss
+            active_holdings, stopped_trades = check_stop_loss(
+                engine.returns, new_holdings, date, next_date, config.stop_loss,
+                current_prices=current_prices_row
             )
-            total_stop_losses += len(stopped)
+            
+            total_stop_losses += len(stopped_trades)
+            trade_logs.extend(stopped_trades)
             
             # Calculate period return
             period_returns = engine.returns.loc[date:next_date].iloc[1:]
@@ -341,6 +402,7 @@ def run_factor_backtest(
                 
                 portfolio_gross *= (1 + gross_ret)
                 portfolio_net *= (1 + gross_ret - period_cost)
+                current_equity = portfolio_net
         
         # 5. Update holding periods
         new_periods = {}
@@ -369,7 +431,7 @@ def run_factor_backtest(
         
         holdings = new_holdings
     
-    return pd.DataFrame(results)
+    return pd.DataFrame(results), trade_logs
 
 
 def calculate_performance_metrics(equity_curve: pd.DataFrame) -> Dict:

@@ -198,21 +198,20 @@ def get_all_portfolios():
 @router.post("/backtest")
 def run_backtest(
     start_year: int = Query(default=None, description="Start year"),
-    end_year: int = Query(default=None, description="End year")
+    end_year: int = Query(default=None, description="End year"),
+    top_n: int = Query(default=50, description="Number of stocks to hold")
 ):
     """
-    Run a backtest simulation.
+    Run a walk-forward factor backtest simulation.
     
-    Uses Parquet/DuckDB DataProvider for fast price lookups.
+    Uses Parquet/DuckDB for fast data access and PointInTimeFactorEngine
+    for signal generation (VSM, BAB, Momentum).
     """
     try:
-        # Create data provider (uses Parquet)
-        provider = create_data_provider(provider_type='parquet')
+        from quant.backtest.factor_engine import run_factor_backtest, calculate_performance_metrics
+        import pandas as pd
         
-        # Create backtest engine with data provider
-        engine = BacktestEngine(data_provider=provider)
-        
-        # Calculate date range
+        # 1. Setup Dates
         if end_year:
             end_date = date(end_year, 12, 31)
         else:
@@ -221,15 +220,72 @@ def run_backtest(
         if start_year:
             start_date = date(start_year, 1, 1)
         else:
-            start_date = end_date - timedelta(days=365)
+            # Default to 2 years
+            start_date = date(end_date.year - 2, 1, 1)
+            
+        # Need extra data for factor lookup (approx 1 year)
+        data_start = date(start_date.year - 1, 1, 1)
         
-        results = engine.run_backtest(start_date, end_date)
+        logger.info(f"Starting backtest {start_date} to {end_date} (Data from {data_start})")
         
-        # Convert DataFrame to dict if needed
-        if hasattr(results, 'to_dict'):
-            return results.to_dict('records')
-        return results
+        # 2. Fetch Data
+        provider = create_data_provider(provider_type='parquet')
+        
+        # Get universe first (optimization: can we cache this?)
+        # For now, get all tickers that existed at end_date
+        tickers = provider.get_universe(as_of_date=end_date)
+        
+        if not tickers:
+             raise HTTPException(status_code=404, detail="No data available in data lake")
+             
+        # Fetch prices
+        # We need 'close' for the engine
+        logger.info(f"Fetching prices for {len(tickers)} tickers...")
+        prices = provider.get_prices(
+            tickers=tickers,
+            start_date=data_start,
+            end_date=end_date,
+            fields=['close']  # factor_engine expects 'close'
+        )
+        
+        if prices.empty:
+            raise HTTPException(status_code=404, detail="No price data found for selected period")
+            
+        # 3. Generate Rebalance Dates (Monthly)
+        # pd.date_range returns DatetimeIndex, convert to list of dates or timestamps
+        # run_factor_backtest expects list of pd.Timestamp or date
+        rebalance_dates = pd.date_range(start=start_date, end=end_date, freq='ME')
+        
+        if len(rebalance_dates) == 0:
+             raise HTTPException(status_code=400, detail="Period too short for monthly rebalancing")
+
+        # 4. Run Backtest
+        logger.info("Running factor backtest...")
+        equity_curve, trade_logs = run_factor_backtest(
+            prices_df=prices,
+            rebalance_dates=rebalance_dates,
+            top_n=top_n
+        )
+        
+        if equity_curve.empty:
+            return {
+                "metrics": {},
+                "equity_curve": [],
+                "trades": []
+            }
+            
+        # 5. Calculate Metrics
+        metrics = calculate_performance_metrics(equity_curve)
+        
+        return {
+            "metrics": metrics,
+            "equity_curve": equity_curve.to_dict(orient='records'),
+            "trades": trade_logs
+        }
         
     except Exception as e:
         logger.error(f"Backtest failed: {e}")
+        # Print stack trace for debugging
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
