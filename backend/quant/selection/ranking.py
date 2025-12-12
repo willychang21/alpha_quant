@@ -26,6 +26,7 @@ from quant.features.sentiment import NewsSentimentFactor
 from quant.features.revisions import AnalystRevisions
 from quant.features.valuation_composite import ValuationComposite
 from quant.features.capital_flow import CapitalFlowFactor
+from quant.rotation import AdvancedRotationFactor
 from quant.regime.hmm import RegimeDetector, DynamicFactorWeights
 from datetime import date
 from typing import Dict, List, Optional, Any
@@ -92,6 +93,9 @@ class RankingEngine:
         
         # Capital Flow Detection (Sector Rotation + Money Flow)
         self.capital_flow_gen = CapitalFlowFactor()
+        
+        # Advanced Market Rotation (RSL, MRS, Volume Structure, Scorecard)
+        self.advanced_rotation_gen = AdvancedRotationFactor()
         
         # Regime Detection
         self.regime_detector = RegimeDetector(n_states=2, lookback=252)
@@ -352,8 +356,34 @@ class RankingEngine:
                             'sector_flow': sector_flow_score,
                             'money_flow': money_flow_score,
                             'mfi': mfi_value,
-                            'obv_zscore': obv_zscore
+                            'obv_zscore': obv_zscore,
+                            # Advanced Rotation
+                            'advanced_rotation': 0.0,
+                            'rsl': 1.0,
+                            'mrs_signal': 'lagging',
+                            'volume_pattern': 'neutral'
                         }
+                        
+                        # 10. Advanced Rotation (Levy RS, Mansfield RS, Volume Structure)
+                        try:
+                            # Set benchmark prices for Mansfield RS
+                            if not spy_history.empty:
+                                self.advanced_rotation_gen.set_benchmark_prices(spy_history)
+                            
+                            sector = ticker_data.get('info', {}).get('sector', 'Unknown')
+                            advanced_rotation_raw = self.advanced_rotation_gen.compute(
+                                history, None, sec.ticker, sector
+                            )
+                            if isinstance(advanced_rotation_raw, pd.Series) and not advanced_rotation_raw.empty:
+                                result['advanced_rotation'] = float(advanced_rotation_raw.iloc[-1])
+                            
+                            # Get component values for detailed storage
+                            if hasattr(self.advanced_rotation_gen, 'levy_calc'):
+                                rsl_series = self.advanced_rotation_gen.levy_calc.calculate_rsl(history['Close'])
+                                if not rsl_series.empty:
+                                    result['rsl'] = float(rsl_series.iloc[-1])
+                        except Exception as e:
+                            logger.debug(f"Advanced rotation calculation failed for {sec.ticker}: {e}")
                         
                         return result
                     except Exception as e:
@@ -391,6 +421,7 @@ class RankingEngine:
         if 'revisions' not in weights: weights['revisions'] = 0.10
         if 'valuation_composite' not in weights: weights['valuation_composite'] = 0.15
         if 'capital_flow' not in weights: weights['capital_flow'] = 0.12
+        if 'advanced_rotation' not in weights: weights['advanced_rotation'] = 0.10
         
         logger.info(f"📊 Using {self.current_regime} regime weights: {weights}")
         
@@ -405,7 +436,8 @@ class RankingEngine:
             weights.get('pead', 0) * df.get('z_pead_neutral', df.get('pead', 0)) +
             weights.get('sentiment', 0) * df.get('z_sentiment_neutral', df.get('sentiment', 0)) +
             weights.get('revisions', 0) * df.get('z_revisions_neutral', 0) +
-            weights.get('capital_flow', 0) * df.get('z_capital_flow_neutral', df.get('capital_flow', 0))
+            weights.get('capital_flow', 0) * df.get('z_capital_flow_neutral', df.get('capital_flow', 0)) +
+            weights.get('advanced_rotation', 0) * df.get('z_advanced_rotation_neutral', df.get('advanced_rotation', 0))
         ).fillna(0.0)
         
         # Rank
@@ -454,7 +486,13 @@ class RankingEngine:
                 'money_flow': row.get('money_flow', 0),
                 'z_capital_flow': row.get('z_capital_flow_neutral', row.get('capital_flow', 0)),
                 'mfi': row.get('mfi', 50),
-                'obv_zscore': row.get('obv_zscore', 0)
+                'obv_zscore': row.get('obv_zscore', 0),
+                # Advanced Rotation
+                'advanced_rotation': row.get('advanced_rotation', 0),
+                'rsl': row.get('rsl', 1.0),
+                'mrs_signal': row.get('mrs_signal', 'lagging'),
+                'volume_pattern': row.get('volume_pattern', 'neutral'),
+                'z_advanced_rotation': row.get('z_advanced_rotation_neutral', row.get('advanced_rotation', 0))
             }
             
             signals_data.append({
