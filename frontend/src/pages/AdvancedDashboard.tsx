@@ -4,6 +4,7 @@ import { RegimeBanner } from '@/components/RegimeBanner';
 import { FactorRadar } from '@/components/FactorRadar';
 import { SmartTradeTable } from '@/components/SmartTradeTable';
 import { RiskMonitor } from '@/components/RiskMonitor';
+import { SectorRotation } from '@/components/SectorRotation';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Activity, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -121,6 +122,9 @@ const AdvancedDashboard: React.FC = () => {
                         <RiskMonitor />
                     </div>
                 </div>
+
+                {/* Sector Rotation - Capital Flow Detection */}
+                <SectorRotation />
 
                 {/* Smart Execution Table */}
                 <SmartTradeTable 

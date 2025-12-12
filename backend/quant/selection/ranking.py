@@ -25,6 +25,7 @@ from quant.features.pead import PostEarningsAnnouncementDrift, EarningsMomentum
 from quant.features.sentiment import NewsSentimentFactor
 from quant.features.revisions import AnalystRevisions
 from quant.features.valuation_composite import ValuationComposite
+from quant.features.capital_flow import CapitalFlowFactor
 from quant.regime.hmm import RegimeDetector, DynamicFactorWeights
 from datetime import date
 from typing import Dict, List, Optional, Any
@@ -88,6 +89,9 @@ class RankingEngine:
         # Phase 8: Weekly System Factors
         self.revisions_gen = AnalystRevisions()
         self.val_composite_gen = ValuationComposite()
+        
+        # Capital Flow Detection (Sector Rotation + Money Flow)
+        self.capital_flow_gen = CapitalFlowFactor()
         
         # Regime Detection
         self.regime_detector = RegimeDetector(n_states=2, lookback=252)
@@ -289,6 +293,40 @@ class RankingEngine:
                         val_comp = self.val_composite_gen.compute(ticker_data, upside, risk_free_rate)
                         val_comp_score = val_comp.get('score', 0.0)
                         
+                        # 9. Capital Flow (Sector Rotation + Money Flow)
+                        capital_flow_score = 0.0
+                        sector_flow_score = 0.0
+                        money_flow_score = 0.0
+                        mfi_value = 50.0
+                        obv_zscore = 0.0
+                        try:
+                            sector = ticker_data.get('info', {}).get('sector', 'Unknown')
+                            capital_flow_raw = self.capital_flow_gen.compute(
+                                history, None, sec.ticker, sector
+                            )
+                            if isinstance(capital_flow_raw, pd.Series) and not capital_flow_raw.empty:
+                                capital_flow_score = float(capital_flow_raw.iloc[-1])
+                            sector_flow_score = self.capital_flow_gen.get_sector_flow_score(sector)
+                            money_flow_score = self.capital_flow_gen.get_money_flow_score(history)
+                            
+                            # Get MFI and OBV directly from money_flow_calculator
+                            if hasattr(self.capital_flow_gen, 'money_flow_calculator'):
+                                mfc = self.capital_flow_gen.money_flow_calculator
+                                if 'High' in history.columns and 'Low' in history.columns:
+                                    mfi_series = mfc.calculate_mfi(
+                                        history['High'], history['Low'], 
+                                        history['Close'], history['Volume']
+                                    )
+                                    if not mfi_series.empty:
+                                        mfi_value = float(mfi_series.iloc[-1])
+                                    
+                                    obv_series = mfc.calculate_obv(history['Close'], history['Volume'])
+                                    obv_norm = mfc.normalize_obv(obv_series)
+                                    if not obv_norm.empty:
+                                        obv_zscore = float(obv_norm.iloc[-1])
+                        except Exception as e:
+                            logger.debug(f"Capital flow calculation failed for {sec.ticker}: {e}")
+                        
                         # Construct Result Dict
                         result = {
                             'sid': sec.sid,
@@ -308,7 +346,13 @@ class RankingEngine:
                             'revisions': revisions_score,
                             'valuation_composite': val_comp_score,
                             'earnings_yield': val_comp.get('earnings_yield', 0.0),
-                            'yield_spread': val_comp.get('yield_spread', 0.0)
+                            'yield_spread': val_comp.get('yield_spread', 0.0),
+                            # Capital Flow
+                            'capital_flow': capital_flow_score,
+                            'sector_flow': sector_flow_score,
+                            'money_flow': money_flow_score,
+                            'mfi': mfi_value,
+                            'obv_zscore': obv_zscore
                         }
                         
                         return result
@@ -345,7 +389,8 @@ class RankingEngine:
         weights = DynamicFactorWeights.get_weights(self.current_regime)
         # Add weights for new factors if not present in DynamicFactorWeights
         if 'revisions' not in weights: weights['revisions'] = 0.10
-        if 'valuation_composite' not in weights: weights['valuation_composite'] = 0.15 # Overrides 'upside' weight partially?
+        if 'valuation_composite' not in weights: weights['valuation_composite'] = 0.15
+        if 'capital_flow' not in weights: weights['capital_flow'] = 0.12
         
         logger.info(f"📊 Using {self.current_regime} regime weights: {weights}")
         
@@ -356,10 +401,11 @@ class RankingEngine:
             weights['vsm'] * df.get('z_volatility_scaled_momentum_neutral', 0) +
             weights['bab'] * df.get('z_betting_against_beta_neutral', 0) +
             weights['qmj'] * df.get('quality', 0) +
-            weights['upside'] * df.get('z_valuation_composite_neutral', df.get('z_upside_neutral', 0)) + # Use Composite if available
+            weights['upside'] * df.get('z_valuation_composite_neutral', df.get('z_upside_neutral', 0)) +
             weights.get('pead', 0) * df.get('z_pead_neutral', df.get('pead', 0)) +
             weights.get('sentiment', 0) * df.get('z_sentiment_neutral', df.get('sentiment', 0)) +
-            weights.get('revisions', 0) * df.get('z_revisions_neutral', 0) # New Revisions Factor
+            weights.get('revisions', 0) * df.get('z_revisions_neutral', 0) +
+            weights.get('capital_flow', 0) * df.get('z_capital_flow_neutral', df.get('capital_flow', 0))
         ).fillna(0.0)
         
         # Rank
@@ -401,7 +447,14 @@ class RankingEngine:
                 'revisions': row.get('revisions', 0),
                 'val_composite': row.get('valuation_composite', 0),
                 'z_revisions': row.get('z_revisions_neutral', 0),
-                'z_val_composite': row.get('z_valuation_composite_neutral', 0)
+                'z_val_composite': row.get('z_valuation_composite_neutral', 0),
+                # Capital Flow
+                'capital_flow': row.get('capital_flow', 0),
+                'sector_flow': row.get('sector_flow', 0),
+                'money_flow': row.get('money_flow', 0),
+                'z_capital_flow': row.get('z_capital_flow_neutral', row.get('capital_flow', 0)),
+                'mfi': row.get('mfi', 50),
+                'obv_zscore': row.get('obv_zscore', 0)
             }
             
             signals_data.append({

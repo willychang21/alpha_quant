@@ -316,6 +316,246 @@ def get_dashboard_summary():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/sector-rotation", response_model=Dict[str, Any])
+def get_sector_rotation():
+    """
+    Returns sector rotation analysis using RRG (Relative Rotation Graph) methodology.
+    Shows which sectors are receiving capital inflows (Improving) vs outflows (Weakening).
+    """
+    try:
+        from quant.features.capital_flow.sector_rotation import SectorRotationAnalyzer
+        
+        analyzer = SectorRotationAnalyzer()
+        results = analyzer.analyze_all_sectors(period='6mo')
+        
+        if not results:
+            return {
+                "status": "no_data",
+                "sectors": [],
+                "quadrant_summary": {}
+            }
+        
+        # Format results for frontend
+        sectors = []
+        quadrant_counts = {'Leading': 0, 'Improving': 0, 'Weakening': 0, 'Lagging': 0}
+        
+        for symbol, result in results.items():
+            sectors.append({
+                'symbol': result.symbol,
+                'name': result.sector_name,
+                'rs_ratio': round(result.rs_ratio, 2),
+                'rs_momentum': round(result.rs_momentum, 2),
+                'quadrant': result.quadrant,
+                'previous_quadrant': result.previous_quadrant,
+                'transition_signal': result.transition_signal,
+                'score': analyzer.get_quadrant_score(result.quadrant)
+            })
+            quadrant_counts[result.quadrant] = quadrant_counts.get(result.quadrant, 0) + 1
+        
+        # Sort by RS Momentum (strongest momentum first)
+        sectors.sort(key=lambda x: x['rs_momentum'], reverse=True)
+        
+        # Identify capital flow direction
+        improving_sectors = [s for s in sectors if s['quadrant'] == 'Improving']
+        leading_sectors = [s for s in sectors if s['quadrant'] == 'Leading']
+        weakening_sectors = [s for s in sectors if s['quadrant'] == 'Weakening']
+        lagging_sectors = [s for s in sectors if s['quadrant'] == 'Lagging']
+        
+        return {
+            "status": "success",
+            "sectors": sectors,
+            "quadrant_summary": quadrant_counts,
+            "capital_inflow": [s['name'] for s in improving_sectors + leading_sectors],
+            "capital_outflow": [s['name'] for s in weakening_sectors + lagging_sectors],
+            "hot_sectors": [s['name'] for s in improving_sectors],  # Early signal
+            "generated_at": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sector-stocks/{sector_name}", response_model=Dict[str, Any])
+def get_sector_stocks(sector_name: str):
+    """
+    Returns stocks within a specific sector with their individual money flow scores.
+    Calculates MFI/OBV on-the-fly if not present in stored metadata.
+    """
+    try:
+        from quant.data.signal_store import get_signal_store
+        from quant.features.capital_flow.money_flow import MoneyFlowCalculator
+        import json
+        import yfinance as yf
+        
+        store = get_signal_store()
+        mfc = MoneyFlowCalculator(mfi_period=14)
+        
+        # Get latest signals
+        signals_df = store.get_latest_signals(model_name='ranking_v3', limit=500)
+        if signals_df.empty:
+            signals_df = store.get_latest_signals(model_name='ranking_v2', limit=500)
+        
+        if signals_df.empty:
+            return {
+                "status": "no_data",
+                "sector": sector_name,
+                "stocks": []
+            }
+        
+        # Filter by sector and collect tickers that need MFI/OBV calculation
+        sector_stocks = []
+        tickers_need_calc = []
+        
+        for _, row in signals_df.iterrows():
+            try:
+                meta = {}
+                if 'metadata_json' in row and row['metadata_json']:
+                    meta = json.loads(row['metadata_json']) if isinstance(row['metadata_json'], str) else row['metadata_json']
+                
+                stock_sector = meta.get('sector', 'Unknown')
+                
+                # Match sector name (case-insensitive, partial match)
+                if sector_name.lower() in stock_sector.lower() or stock_sector.lower() in sector_name.lower():
+                    ticker = row['ticker']
+                    mfi = meta.get('mfi')
+                    obv_zscore = meta.get('obv_zscore')
+                    money_flow = meta.get('money_flow')
+                    
+                    # Check if we need to calculate on-the-fly
+                    needs_calc = (mfi is None or mfi == 50) and (obv_zscore is None or obv_zscore == 0)
+                    
+                    sector_stocks.append({
+                        'ticker': ticker,
+                        'score': row['score'],
+                        'rank': row['rank'],
+                        'meta': meta,
+                        'needs_calc': needs_calc
+                    })
+                    
+                    if needs_calc:
+                        tickers_need_calc.append(ticker)
+            except Exception:
+                continue
+        
+        # Bulk fetch price data for tickers that need calculation (max 20 to avoid timeout)
+        mfi_obv_cache = {}
+        if tickers_need_calc:
+            calc_tickers = tickers_need_calc[:20]  # Limit to avoid timeout
+            try:
+                bulk_data = yf.download(calc_tickers, period='3mo', group_by='ticker', progress=False, threads=True)
+                
+                for ticker in calc_tickers:
+                    try:
+                        if len(calc_tickers) > 1:
+                            if ticker in bulk_data.columns.get_level_values(0):
+                                hist = bulk_data[ticker].dropna()
+                            else:
+                                continue
+                        else:
+                            hist = bulk_data.dropna()
+                        
+                        if hist.empty or len(hist) < 20:
+                            continue
+                        
+                        # Handle MultiIndex columns from yfinance
+                        if isinstance(hist.columns, pd.MultiIndex):
+                            hist.columns = hist.columns.get_level_values(0)
+                        
+                        # Calculate MFI
+                        mfi_series = mfc.calculate_mfi(
+                            hist['High'], hist['Low'], hist['Close'], hist['Volume']
+                        )
+                        mfi_val = float(mfi_series.iloc[-1]) if not mfi_series.empty else 50.0
+                        
+                        # Calculate OBV Z-score
+                        obv_series = mfc.calculate_obv(hist['Close'], hist['Volume'])
+                        obv_norm = mfc.normalize_obv(obv_series)
+                        obv_z = float(obv_norm.iloc[-1]) if not obv_norm.empty else 0.0
+                        
+                        # Calculate money flow score from MFI and OBV
+                        # MFI < 30 = oversold (bullish), > 70 = overbought (bearish)
+                        # OBV Z > 0 = accumulation, < 0 = distribution
+                        mfi_signal = (50 - mfi_val) / 50  # -1 to 1, positive when oversold
+                        money_flow_calc = (mfi_signal * 0.4) + (obv_z * 0.6)
+                        
+                        mfi_obv_cache[ticker] = {
+                            'mfi': mfi_val,
+                            'obv_zscore': obv_z,
+                            'money_flow': money_flow_calc
+                        }
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+        
+        # Build final stock list
+        stocks = []
+        for item in sector_stocks:
+            ticker = item['ticker']
+            meta = item['meta']
+            
+            # Use cached calculation if available, otherwise use stored values
+            if ticker in mfi_obv_cache:
+                mfi = mfi_obv_cache[ticker]['mfi']
+                obv_zscore = mfi_obv_cache[ticker]['obv_zscore']
+                money_flow = mfi_obv_cache[ticker]['money_flow']
+            else:
+                mfi = meta.get('mfi', 50) or 50
+                obv_zscore = meta.get('obv_zscore', 0) or 0
+                money_flow = meta.get('money_flow', 0) or 0
+            
+            capital_flow = meta.get('capital_flow', 0) or 0
+            sector_flow = meta.get('sector_flow', 0) or 0
+            
+            # Determine flow signal
+            if money_flow > 0.5:
+                flow_signal = 'Strong Inflow'
+            elif money_flow > 0:
+                flow_signal = 'Inflow'
+            elif money_flow < -0.5:
+                flow_signal = 'Strong Outflow'
+            elif money_flow < 0:
+                flow_signal = 'Outflow'
+            else:
+                flow_signal = 'Neutral'
+            
+            stocks.append({
+                'ticker': ticker,
+                'score': round(item['score'], 2),
+                'rank': int(item['rank']),
+                'capital_flow': round(capital_flow, 2),
+                'money_flow': round(money_flow, 2),
+                'sector_flow': round(sector_flow, 2),
+                'mfi': round(mfi, 1),
+                'obv_zscore': round(obv_zscore, 2),
+                'flow_signal': flow_signal,
+                'vsm': round(meta.get('vsm', 0) or 0, 2),
+                'sentiment': round(meta.get('sentiment', 0) or 0, 2)
+            })
+        
+        # Sort by money_flow (strongest inflow first)
+        stocks.sort(key=lambda x: x['money_flow'], reverse=True)
+        
+        # Summary stats
+        avg_money_flow = sum(s['money_flow'] for s in stocks) / len(stocks) if stocks else 0
+        inflow_count = len([s for s in stocks if s['money_flow'] > 0])
+        outflow_count = len([s for s in stocks if s['money_flow'] < 0])
+        
+        return {
+            "status": "success",
+            "sector": sector_name,
+            "stock_count": len(stocks),
+            "avg_money_flow": round(avg_money_flow, 2),
+            "inflow_count": inflow_count,
+            "outflow_count": outflow_count,
+            "stocks": stocks,
+            "generated_at": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/backtest/run", response_model=Dict[str, Any])
 def run_backtest(
     start_year: int = Query(2021, description="Start year for backtest"),

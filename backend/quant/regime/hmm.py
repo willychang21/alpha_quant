@@ -188,42 +188,46 @@ class DynamicFactorWeights:
     # Default weights by regime
     REGIME_WEIGHTS = {
         "Bull": {
-            "vsm": 0.25,      # Momentum works in trends
-            "bab": 0.08,      # BAB less important
-            "qmj": 0.17,      # Quality always relevant
-            "upside": 0.17,   # Value works in recoveries
-            "pead": 0.13,     # P3: Earnings drift strong in bull
-            "sentiment": 0.15,# P4: Sentiment matters in bull
+            "vsm": 0.22,      # Momentum works in trends
+            "bab": 0.06,      # BAB less important
+            "qmj": 0.15,      # Quality always relevant
+            "upside": 0.15,   # Value works in recoveries
+            "pead": 0.12,     # P3: Earnings drift strong in bull
+            "sentiment": 0.13,# P4: Sentiment matters in bull
+            "capital_flow": 0.12,  # Capital flow signals stronger in bull
             "accruals": 0.05, # Optional
             "ivol": 0.00      # Optional
         },
         "Bear": {
-            "vsm": 0.08,      # Momentum crashes in reversals
-            "bab": 0.22,      # Low beta protects
-            "qmj": 0.30,      # Quality is defensive
-            "upside": 0.13,   # Value traps possible
+            "vsm": 0.06,      # Momentum crashes in reversals
+            "bab": 0.20,      # Low beta protects
+            "qmj": 0.28,      # Quality is defensive
+            "upside": 0.12,   # Value traps possible
             "pead": 0.10,     # P3: Weaker in bear
-            "sentiment": 0.12,# P4: Sentiment less reliable in bear
+            "sentiment": 0.11,# P4: Sentiment less reliable in bear
+            "capital_flow": 0.08,  # Capital flow less reliable in panic
             "accruals": 0.05,
             "ivol": 0.00
         },
         "Transition": {
-            "vsm": 0.17,
-            "bab": 0.17,
-            "qmj": 0.22,
-            "upside": 0.17,
+            "vsm": 0.15,
+            "bab": 0.15,
+            "qmj": 0.20,
+            "upside": 0.15,
             "pead": 0.10,     # P3: Moderate
-            "sentiment": 0.12,# P4: Moderate
+            "sentiment": 0.10,# P4: Moderate
+            "capital_flow": 0.10,  # Moderate weight in transition
             "accruals": 0.05,
             "ivol": 0.00
         },
         "Unknown": {
-            "vsm": 0.20,
-            "bab": 0.13,
-            "qmj": 0.22,
-            "upside": 0.17,
-            "pead": 0.10,     # P3: Default
-            "sentiment": 0.13,# P4: Default
+            "vsm": 0.18,
+            "bab": 0.12,
+            "qmj": 0.20,
+            "upside": 0.15,
+            "pead": 0.09,     # P3: Default
+            "sentiment": 0.11,# P4: Default
+            "capital_flow": 0.10,  # Default moderate weight
             "accruals": 0.05,
             "ivol": 0.00
         }
