@@ -42,6 +42,159 @@ class SHAPConfig(BaseModel):
     )
 
 
+class DriftDetectionConfig(BaseModel):
+    """Configuration for concept drift detection in online regime detector.
+    
+    Monitors for distributional shifts in prediction errors using KL divergence.
+    When drift is detected, the learning rate is temporarily increased to adapt.
+    
+    Attributes:
+        enabled: Whether drift detection is enabled.
+        threshold: KL divergence threshold for flagging drift (0.05-0.5 typical).
+        window_size: Number of observations in the error history window.
+        adaptation_factor: Multiplier for decay_factor during adaptation (smaller = faster).
+    """
+    enabled: bool = Field(default=True, description="Enable drift detection")
+    threshold: float = Field(
+        default=0.1, 
+        ge=0.0, 
+        le=1.0,
+        description="KL divergence threshold for drift detection"
+    )
+    window_size: int = Field(
+        default=20, 
+        ge=5,
+        description="Window size for error history"
+    )
+    adaptation_factor: float = Field(
+        default=0.8, 
+        gt=0.0, 
+        lt=1.0,
+        description="Multiplier applied to decay factor on drift (smaller = faster adaptation)"
+    )
+
+
+class TemporalAttentionConfig(BaseModel):
+    """Configuration for temporal attention in Supply Chain GNN.
+    
+    Enables multi-horizon signal blending using attention weights
+    across 1-day, 5-day, and 21-day price changes.
+    
+    Attributes:
+        enabled: Whether temporal attention is enabled.
+        hidden_dim: Hidden dimension for attention MLP computation.
+        time_horizons: List of lookback periods in days.
+    """
+    enabled: bool = Field(default=True, description="Enable temporal attention GNN")
+    hidden_dim: int = Field(
+        default=16, 
+        ge=4,
+        description="Hidden dimension for attention computation"
+    )
+    time_horizons: List[int] = Field(
+        default=[1, 5, 21],
+        description="Lookback periods in days for temporal attention"
+    )
+
+
+class NAMConfig(BaseModel):
+    """Configuration for Neural Additive Model (NAM).
+    
+    NAM can replace LinearRegression in Stage 1 of ResidualAlphaModel
+    to capture non-linear factor relationships while maintaining interpretability.
+    
+    Attributes:
+        enabled: Whether NAM is enabled as Stage 1 alternative.
+        hidden_units: Hidden layer sizes for feature networks.
+        dropout: Dropout rate for regularization.
+        export_points: Number of points for shape function export.
+    """
+    enabled: bool = Field(default=False, description="Enable NAM (opt-in)")
+    hidden_units: List[int] = Field(
+        default=[64, 64],
+        description="Hidden layer sizes for feature networks"
+    )
+    dropout: float = Field(
+        default=0.1,
+        ge=0.0,
+        lt=1.0,
+        description="Dropout rate for regularization"
+    )
+    export_points: int = Field(
+        default=100,
+        ge=10,
+        description="Number of points for shape function export"
+    )
+
+
+class TabNetConfig(BaseModel):
+    """Configuration for TabNet model.
+    
+    TabNet can replace ConstrainedGBM as an alternative prediction model
+    with built-in feature selection masks for interpretability.
+    
+    Attributes:
+        enabled: Whether TabNet is enabled as alternative.
+        n_steps: Number of decision steps in TabNet.
+        n_a: Attention embedding dimension.
+        n_d: Output embedding dimension.
+    """
+    enabled: bool = Field(default=False, description="Enable TabNet (opt-in)")
+    n_steps: int = Field(default=3, ge=1, description="Number of decision steps")
+    n_a: int = Field(default=8, ge=4, description="Attention embedding dimension")
+    n_d: int = Field(default=8, ge=4, description="Output embedding dimension")
+
+
+class FoundationModelConfig(BaseModel):
+    """Configuration for foundation model (cold-start scenarios).
+    
+    Foundation models like TimeGPT or TimesFM are used for stocks
+    with insufficient history (<60 days) for traditional model training.
+    
+    Attributes:
+        enabled: Whether foundation model is enabled.
+        model_type: Type of foundation model ('timegpt' or 'timesfm').
+        min_history_days: Threshold for cold-start routing.
+        patch_size: Patch size for time series tokenization.
+    """
+    enabled: bool = Field(default=False, description="Enable foundation model")
+    model_type: str = Field(
+        default='timegpt',
+        description="Foundation model type: 'timegpt' or 'timesfm'"
+    )
+    min_history_days: int = Field(
+        default=60,
+        ge=10,
+        description="Minimum days before using standard models"
+    )
+    patch_size: int = Field(default=16, ge=4, description="Patch size for tokenization")
+
+
+class AdversarialConfig(BaseModel):
+    """Configuration for adversarial orthogonalization.
+    
+    Adversarial training ensures alpha signals are truly uncorrelated
+    with known risk factors using a min-max optimization objective.
+    
+    Attributes:
+        enabled: Whether adversarial orthogonalization is enabled.
+        correlation_threshold: Maximum acceptable factor correlation.
+        max_iterations: Maximum training iterations before fallback.
+    """
+    enabled: bool = Field(default=False, description="Enable adversarial orthogonalization")
+    correlation_threshold: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=0.5,
+        description="Maximum acceptable correlation with factors"
+    )
+    max_iterations: int = Field(
+        default=1000,
+        ge=100,
+        description="Maximum training iterations"
+    )
+
+
 class ResidualAlphaConfig(BaseModel):
     """Configuration for Residual Alpha Model.
     
@@ -193,6 +346,8 @@ class MLEnhancementConfig(BaseModel):
         ...     pass
     """
     shap: SHAPConfig = Field(default_factory=SHAPConfig)
+    drift_detection: DriftDetectionConfig = Field(default_factory=DriftDetectionConfig)
+    temporal_attention: TemporalAttentionConfig = Field(default_factory=TemporalAttentionConfig)
     residual_alpha: ResidualAlphaConfig = Field(default_factory=ResidualAlphaConfig)
     constrained_gbm: ConstrainedGBMConfig = Field(default_factory=ConstrainedGBMConfig)
     online_learning: OnlineLearningConfig = Field(default_factory=OnlineLearningConfig)
@@ -207,6 +362,10 @@ class MLEnhancementConfig(BaseModel):
         features = []
         if self.shap.enabled:
             features.append("SHAP")
+        if self.drift_detection.enabled:
+            features.append("DriftDetection")
+        if self.temporal_attention.enabled:
+            features.append("TemporalAttention")
         if self.residual_alpha.enabled:
             features.append("ResidualAlpha")
         if self.constrained_gbm.enabled:
@@ -253,6 +412,18 @@ def get_ml_enhancement_config() -> MLEnhancementConfig:
             enabled=os.environ.get('ML_RESIDUAL_ALPHA_ENABLED', 'true').lower() == 'true',
         )
         
+        drift_config = DriftDetectionConfig(
+            enabled=os.environ.get('ML_DRIFT_DETECTION_ENABLED', 'true').lower() == 'true',
+            threshold=float(os.environ.get('ML_DRIFT_THRESHOLD', '0.1')),
+            window_size=int(os.environ.get('ML_DRIFT_WINDOW_SIZE', '20')),
+            adaptation_factor=float(os.environ.get('ML_DRIFT_ADAPTATION_FACTOR', '0.8')),
+        )
+        
+        temporal_attention_config = TemporalAttentionConfig(
+            enabled=os.environ.get('ML_TEMPORAL_ATTENTION_ENABLED', 'true').lower() == 'true',
+            hidden_dim=int(os.environ.get('ML_TEMPORAL_ATTENTION_HIDDEN_DIM', '16')),
+        )
+        
         gbm_config = ConstrainedGBMConfig(
             enabled=os.environ.get('ML_CONSTRAINED_GBM_ENABLED', 'true').lower() == 'true',
             num_leaves=int(os.environ.get('ML_GBM_NUM_LEAVES', '31')),
@@ -272,6 +443,8 @@ def get_ml_enhancement_config() -> MLEnhancementConfig:
         
         _ml_enhancement_config = MLEnhancementConfig(
             shap=shap_config,
+            drift_detection=drift_config,
+            temporal_attention=temporal_attention_config,
             residual_alpha=residual_config,
             constrained_gbm=gbm_config,
             online_learning=online_config,

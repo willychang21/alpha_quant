@@ -1,7 +1,7 @@
 """Residual Alpha Model Module.
 
 Implements a two-stage alpha extraction model:
-1. Stage 1: Linear decomposition using traditional factors
+1. Stage 1: Linear decomposition using traditional factors (or NAM for non-linear)
 2. Stage 2: ML prediction on residuals using alternative features
 
 This approach extracts pure idiosyncratic alpha by first removing
@@ -17,7 +17,7 @@ Example:
     >>> total, linear, residual = model.predict(X_linear_new, X_residual_new)
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 import logging
 
 import numpy as np
@@ -26,12 +26,20 @@ from sklearn.linear_model import LinearRegression, Ridge
 
 logger = logging.getLogger(__name__)
 
+# Optional NAM import
+try:
+    from quant.mlops.neural_additive_model import NeuralAdditiveModel
+    NAM_AVAILABLE = True
+except ImportError:
+    NAM_AVAILABLE = False
+
 
 class ResidualAlphaModel:
-    """Two-stage model: Linear factor decomposition + ML residual prediction.
+    """Two-stage model: Linear/NAM factor decomposition + ML residual prediction.
     
-    Stage 1: Fit a linear model to decompose returns into factor exposures.
+    Stage 1: Fit a linear model (or NAM) to decompose returns into factor exposures.
              y = β₁*quality + β₂*value + β₃*momentum + ... + ε
+             OR y = Σ g_i(x_i) + ε (with NAM)
     
     Stage 2: Use ML to predict residuals (ε) from alternative features.
              ε = f(sentiment, pead, capital_flow, ...)
@@ -41,7 +49,8 @@ class ResidualAlphaModel:
     Attributes:
         linear_factors: List of factor names for Stage 1.
         residual_features: List of feature names for Stage 2.
-        linear_model: Fitted linear regression model.
+        stage1_model_type: 'linear' or 'nam' for Stage 1.
+        linear_model: Fitted Stage 1 model (LinearRegression, Ridge, or NAM).
         ml_model: Fitted ML model for residual prediction (optional).
     """
     
@@ -51,7 +60,8 @@ class ResidualAlphaModel:
         residual_features: List[str],
         ml_model: Optional[Any] = None,
         use_ridge: bool = False,
-        ridge_alpha: float = 1.0
+        ridge_alpha: float = 1.0,
+        stage1_model: Literal['linear', 'nam'] = 'linear'
     ):
         """Initialize ResidualAlphaModel.
         
@@ -60,18 +70,29 @@ class ResidualAlphaModel:
             residual_features: Feature names for residual prediction (Stage 2).
             ml_model: Pre-configured ML model for Stage 2 (e.g., ConstrainedGBM).
                       If None, Stage 2 is skipped (linear-only mode).
-            use_ridge: Use Ridge regression instead of OLS for Stage 1.
+            use_ridge: Use Ridge regression instead of OLS for Stage 1 (linear only).
             ridge_alpha: Regularization strength for Ridge regression.
+            stage1_model: 'linear' for LinearRegression/Ridge, 'nam' for NeuralAdditiveModel.
         """
         self.linear_factors = linear_factors
         self.residual_features = residual_features
         self.ml_model = ml_model
+        self.stage1_model_type = stage1_model
         
-        # Stage 1: Linear model
-        if use_ridge:
-            self.linear_model = Ridge(alpha=ridge_alpha)
+        # Stage 1: Model selection
+        if stage1_model == 'nam':
+            if not NAM_AVAILABLE:
+                logger.warning("NAM not available, falling back to linear model")
+                self.stage1_model_type = 'linear'
+                self.linear_model = Ridge(alpha=ridge_alpha) if use_ridge else LinearRegression()
+            else:
+                self.linear_model = NeuralAdditiveModel(feature_names=linear_factors)
+                logger.info("Using Neural Additive Model for Stage 1")
         else:
-            self.linear_model = LinearRegression()
+            if use_ridge:
+                self.linear_model = Ridge(alpha=ridge_alpha)
+            else:
+                self.linear_model = LinearRegression()
         
         # Metrics
         self._linear_r2: Optional[float] = None
