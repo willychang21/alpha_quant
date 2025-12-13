@@ -13,6 +13,7 @@ This document provides comprehensive technical documentation for the DCA Quant B
 - [1. Executive Summary](#1-executive-summary)
 - [2. System Architecture](#2-system-architecture)
 - [3. Theoretical Framework](#3-theoretical-framework)
+  - [3.8 Registry Pattern Architecture](#38-registry-pattern-architecture)
 - [4. Core Components](#4-core-components)
 - [5. Data Integrity Pipeline](#5-data-integrity-pipeline)
 - [6. ML Pipelines](#6-ml-pipelines)
@@ -565,6 +566,348 @@ RS_momentum = ROC₁₄(RS_ratio)
 | ≥ 100 | < 0 | Weakening |
 | < 100 | < 0 | Lagging |
 | < 100 | ≥ 0 | Improving |
+
+---
+
+## 3.8 Registry Pattern Architecture
+
+The system uses a **Plugin Registry Pattern** to separate the platform (core logic) from content (factors, optimizers, risk models). This enables adding new components without modifying existing code.
+
+### 3.8.1 Architecture Overview
+
+```mermaid
+graph TB
+    subgraph "🔌 Core Interfaces (quant/core/)"
+        IFB[FactorBase ABC]
+        IOB[OptimizerBase ABC]
+        IRB[RiskModelBase ABC]
+        PM[PluginMetadata]
+    end
+
+    subgraph "📚 Plugin Registry"
+        REG[PluginRegistry Singleton]
+        
+        REG --> |@register_factor| FF[Factor Registry Dict]
+        REG --> |@register_optimizer| OF[Optimizer Registry Dict]
+        REG --> |@register_risk_model| RF[RiskModel Registry Dict]
+    end
+
+    subgraph "🧩 Factor Plugins (quant/plugins/factors/)"
+        VSM[VSMFactor] --> IFB
+        BAB[BABFactor] --> IFB
+        QMJ[QMJFactor] --> IFB
+        MOM[MomentumFactor] --> IFB
+    end
+
+    subgraph "⚙️ Optimizer Plugins (quant/plugins/optimizers/)"
+        HRP[HRPOptimizer] --> IOB
+        MVO[MVOOptimizer] --> IOB
+        BL[BlackLittermanOptimizer] --> IOB
+        KELLY[KellyOptimizer] --> IOB
+    end
+
+    subgraph "🛡️ Risk Model Plugins (quant/plugins/risk_models/)"
+        MW[MaxWeightConstraint] --> IRB
+        SEC[SectorConstraint] --> IRB
+        BETA[BetaConstraint] --> IRB
+    end
+
+    VSM -.-> |register| FF
+    BAB -.-> |register| FF
+    QMJ -.-> |register| FF
+    MOM -.-> |register| FF
+
+    HRP -.-> |register| OF
+    MVO -.-> |register| OF
+    BL -.-> |register| OF
+    KELLY -.-> |register| OF
+
+    MW -.-> |register| RF
+    SEC -.-> |register| RF
+    BETA -.-> |register| RF
+
+    subgraph "📄 Configuration"
+        YAML[strategies.yaml]
+        LOADER[ConfigLoader]
+        YAML --> LOADER
+        LOADER --> |validate| REG
+    end
+
+    subgraph "🚀 Runtime"
+        PIPE[DynamicFactorPipeline]
+        OPT[PortfolioOptimizer]
+        
+        LOADER --> PIPE
+        REG --> PIPE
+        REG --> OPT
+    end
+
+    style REG fill:#e3f2fd
+    style YAML fill:#fff8e1
+```
+
+### 3.8.2 Core Interfaces
+
+All plugins must implement one of three abstract base classes:
+
+#### FactorBase
+
+```python
+class FactorBase(ABC):
+    """Abstract base class for all factor plugins."""
+    
+    @property
+    @abstractmethod
+    def metadata(self) -> PluginMetadata:
+        """Return plugin metadata (name, description, version, etc.)."""
+        pass
+    
+    @abstractmethod
+    def compute(self, data: pd.DataFrame) -> pd.Series:
+        """Compute factor values from market data.
+        
+        Args:
+            data: DataFrame with 'ticker', 'date', 'close' columns
+            
+        Returns:
+            Series indexed by ticker with factor values
+        """
+        pass
+```
+
+#### OptimizerBase
+
+```python
+class OptimizerBase(ABC):
+    """Abstract base class for portfolio optimizers."""
+    
+    @property
+    @abstractmethod
+    def metadata(self) -> PluginMetadata:
+        pass
+    
+    @abstractmethod
+    def optimize(
+        self, 
+        returns: pd.DataFrame, 
+        cov: pd.DataFrame, 
+        **kwargs
+    ) -> pd.Series:
+        """Run portfolio optimization.
+        
+        Args:
+            returns: Historical returns (Date x Ticker)
+            cov: Covariance matrix
+            
+        Returns:
+            Series of weights indexed by ticker
+        """
+        pass
+```
+
+#### RiskModelBase
+
+```python
+class RiskModelBase(ABC):
+    """Abstract base class for risk constraint models."""
+    
+    @property
+    @abstractmethod
+    def metadata(self) -> PluginMetadata:
+        pass
+    
+    @abstractmethod
+    def check_constraints(
+        self, 
+        weights: pd.Series, 
+        **context
+    ) -> tuple[bool, Optional[str]]:
+        """Check if portfolio satisfies constraints.
+        
+        Args:
+            weights: Portfolio weights indexed by ticker
+            **context: Additional context (sectors, betas, etc.)
+            
+        Returns:
+            (is_valid, error_message) tuple
+        """
+        pass
+```
+
+### 3.8.3 Plugin Metadata
+
+Every plugin provides metadata for discovery and documentation:
+
+```python
+@dataclass
+class PluginMetadata:
+    name: str           # Unique identifier
+    description: str    # Human-readable description
+    version: str = "1.0.0"
+    author: str = ""
+    category: str = ""  # "momentum", "optimization", "risk"
+    parameters: Dict[str, str] = field(default_factory=dict)
+```
+
+### 3.8.4 Decorator-Based Registration
+
+Plugins register themselves using decorators:
+
+```python
+from quant.core import FactorBase, PluginMetadata, register_factor
+
+@register_factor("MyFactor")  # Registers with name "MyFactor"
+class MyFactor(FactorBase):
+    def __init__(self, params: Dict = None):
+        self.params = params or {}
+        self.lookback = self.params.get("lookback", 252)
+    
+    @property
+    def metadata(self):
+        return PluginMetadata(
+            name="MyFactor",
+            description="Custom factor implementation",
+            version="1.0.0",
+            parameters={"lookback": "Lookback period in days"}
+        )
+    
+    def compute(self, data: pd.DataFrame) -> pd.Series:
+        # Implementation
+        return data.groupby("ticker")["close"].pct_change(self.lookback).last()
+```
+
+### 3.8.5 Registry Operations
+
+The `PluginRegistry` singleton provides:
+
+| Method | Description |
+|--------|-------------|
+| `register_factor(name)` | Decorator to register a factor class |
+| `register_optimizer(name)` | Decorator to register an optimizer class |
+| `register_risk_model(name)` | Decorator to register a risk model class |
+| `get_factor(name)` | Retrieve factor class by name |
+| `get_optimizer(name)` | Retrieve optimizer class by name |
+| `get_risk_model(name)` | Retrieve risk model class by name |
+| `list_factors()` | List all registered factor names |
+| `list_optimizers()` | List all registered optimizer names |
+| `list_risk_models()` | List all registered risk model names |
+| `discover_plugins(package)` | Auto-discover plugins in a package |
+| `get_all_metadata()` | Get metadata for all registered plugins |
+
+### 3.8.6 Configuration-Driven Pipeline
+
+Strategies are defined in YAML:
+
+```yaml
+# config/strategies.yaml
+strategy:
+  name: "momentum_quality"
+  version: "1.0"
+  description: "Momentum + Quality with HRP"
+
+factors:
+  - name: "VSM"
+    params: {lookback: 252, vol_window: 60}
+  - name: "BAB"
+    enabled: true
+  - name: "QMJ"
+    params: {profitability_weight: 0.5}
+
+optimizer:
+  name: "HRP"
+  params: {linkage_method: "ward"}
+
+risk_rules:
+  - name: "MaxWeight"
+    params: {max_weight: 0.10}
+  - name: "Sector"
+    params: {max_sector_weight: 0.30}
+  - name: "Beta"
+    params: {min_beta: 0.8, max_beta: 1.2}
+```
+
+**Loading and Using:**
+
+```python
+from quant.features.pipeline import FactorPipeline
+from quant.portfolio.optimizer import PortfolioOptimizer
+
+# Create dynamic pipeline from config
+pipeline = FactorPipeline.from_config("config/strategies.yaml")
+
+# Compute all factors
+factor_scores = pipeline.compute_all(market_data)
+
+# Optimizer automatically uses Registry
+optimizer = PortfolioOptimizer(db)
+result = optimizer.run_optimization(date.today(), optimizer='hrp')
+```
+
+### 3.8.7 Available Plugins
+
+#### Factor Plugins
+
+| Name | Description | Key Parameters |
+|------|-------------|----------------|
+| **VSM** | Volatility Scaled Momentum | `lookback`, `vol_window`, `target_vol` |
+| **BAB** | Betting Against Beta | `beta_lookback` |
+| **QMJ** | Quality Minus Junk | `profitability_weight`, `growth_weight`, `safety_weight` |
+| **Momentum** | Basic Price Momentum | `lookback` |
+
+#### Optimizer Plugins
+
+| Name | Description | Key Parameters |
+|------|-------------|----------------|
+| **HRP** | Hierarchical Risk Parity | `linkage_method`, `risk_measure` |
+| **MVO** | Mean-Variance Optimization | `risk_aversion`, `max_weight`, `long_only` |
+| **BlackLitterman** | Bayesian view combining | `tau`, `risk_aversion`, `ic` |
+| **Kelly** | Kelly Criterion | `fractional_kelly`, `max_leverage` |
+
+#### Risk Model Plugins
+
+| Name | Description | Key Parameters |
+|------|-------------|----------------|
+| **MaxWeight** | Max single position weight | `max_weight` (default: 0.10) |
+| **Sector** | Sector concentration limit | `max_sector_weight` (default: 0.30) |
+| **Beta** | Portfolio beta bounds | `min_beta`, `max_beta` |
+
+### 3.8.8 Adding New Plugins
+
+To add a new optimizer:
+
+1. Create file: `quant/plugins/optimizers/my_optimizer.py`
+2. Implement the class:
+
+```python
+from quant.core import OptimizerBase, PluginMetadata, register_optimizer
+
+@register_optimizer("MyOptimizer")
+class MyOptimizer(OptimizerBase):
+    def __init__(self, params=None):
+        self.params = params or {}
+    
+    @property
+    def metadata(self):
+        return PluginMetadata(name="MyOptimizer", description="...")
+    
+    def optimize(self, returns, cov, **kwargs):
+        # Your optimization logic
+        return pd.Series(weights, index=cov.columns)
+```
+
+3. Import in `quant/plugins/optimizers/__init__.py`:
+
+```python
+from . import my_optimizer
+```
+
+4. Use in config or code:
+
+```yaml
+optimizer:
+  name: "MyOptimizer"
+  params: {my_param: 123}
+```
 
 ---
 
