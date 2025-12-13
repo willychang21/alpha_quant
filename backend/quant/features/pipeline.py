@@ -2,20 +2,51 @@
 
 Processes raw factor values into clean, tradable signals.
 Supports Parquet-based caching for repeated computations.
+
+Integration with Registry Pattern:
+    Use FactorPipeline.from_config() to create a configuration-driven pipeline.
 """
 
 import pandas as pd
 import numpy as np
 import hashlib
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, TYPE_CHECKING
 import logging
 
 logger = logging.getLogger(__name__)
 
+# Lazy import to avoid circular dependencies
+if TYPE_CHECKING:
+    from quant.features.dynamic_pipeline import DynamicFactorPipeline
+
 
 class FactorPipeline:
-    """Processes raw factor values into clean, tradable signals."""
+    """Processes raw factor values into clean, tradable signals.
+    
+    For configuration-driven factor computation using the Registry Pattern,
+    use the `from_config()` class method or `DynamicFactorPipeline` directly.
+    """
+    
+    @classmethod
+    def from_config(cls, config_path: str) -> "DynamicFactorPipeline":
+        """Create a dynamic pipeline from configuration file.
+        
+        This method provides integration with the new Registry Pattern.
+        Factors are loaded dynamically based on YAML/JSON configuration.
+        
+        Args:
+            config_path: Path to YAML or JSON strategy configuration.
+            
+        Returns:
+            DynamicFactorPipeline instance configured from file.
+            
+        Example:
+            pipeline = FactorPipeline.from_config("config/strategies.yaml")
+            factor_results = pipeline.compute_all(market_data)
+        """
+        from quant.features.dynamic_pipeline import DynamicFactorPipeline
+        return DynamicFactorPipeline(config_path=config_path)
     
     @staticmethod
     def _get_cache_key(df: pd.DataFrame) -> str:
@@ -138,3 +169,4 @@ class FactorPipeline:
                     )
                     
         return processed
+

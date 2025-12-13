@@ -13,10 +13,11 @@ A production-ready quantitative trading platform featuring multi-factor alpha ge
 ## ✨ Key Features
 
 - **10+ Alpha Factors** — VSM, BAB, QMJ, PEAD, Sentiment, Capital Flow, Rotation
+- **Registry Pattern** — Plugin-based architecture for factors, optimizers, and risk models
 - **Regime Detection** — HMM-based Bull/Bear classification with dynamic factor weighting
 - **ML Enhancement** — SHAP attribution, Constrained GBM, Residual Alpha modeling
-- **Portfolio Optimization** — HRP, Black-Litterman, Multivariate Kelly
-- **Risk Management** — Component VaR decomposition, tail hedging
+- **Portfolio Optimization** — HRP, Black-Litterman, Multivariate Kelly (all loadable via Registry)
+- **Risk Management** — Component VaR decomposition, tail hedging, constraint plugins
 - **Distributed Backtesting** — Ray-powered parallel Walk-Forward CV
 - **Operational Resilience** — Circuit breaker, data freshness alerts, health endpoints
 
@@ -147,15 +148,27 @@ curl http://localhost:8000/api/v1/quant/rankings?limit=10
 backend/
 ├── main.py                 # FastAPI entry point
 ├── config/                 # Pydantic Settings
+│   └── strategies.yaml     # Strategy configuration (YAML)
 │
 ├── app/                    # 🌐 API Layer
 │   ├── api/v1/endpoints/   # REST endpoints
 │   └── services/           # Business logic
 │
 ├── quant/                  # 📊 Quant Core Engine
-│   ├── features/           # Alpha factors (VSM, BAB, QMJ...)
+│   ├── core/               # 🔌 Registry Pattern (NEW)
+│   │   ├── interfaces.py   # FactorBase, OptimizerBase, RiskModelBase
+│   │   ├── registry.py     # PluginRegistry singleton
+│   │   ├── config_models.py# Pydantic config schemas
+│   │   └── config_loader.py# YAML/JSON loader
+│   │
+│   ├── plugins/            # 🧩 Plugin Directory (NEW)
+│   │   ├── factors/        # Factor plugins (VSM, BAB, QMJ, Momentum)
+│   │   ├── optimizers/     # Optimizer plugins (HRP, MVO, BL, Kelly)
+│   │   └── risk_models/    # Risk plugins (MaxWeight, Sector, Beta)
+│   │
+│   ├── features/           # Factor pipeline & dynamic loading
 │   ├── regime/             # HMM regime detection
-│   ├── portfolio/          # HRP, Kelly, Black-Litterman
+│   ├── portfolio/          # Portfolio optimizer (uses Registry)
 │   ├── backtest/           # Distributed backtesting (Ray)
 │   └── data/               # Data providers & validation
 │
@@ -182,6 +195,49 @@ backend/
 | [**API Reference**](docs/TECHNICAL_MANUAL.md#api-reference) | REST endpoints & schemas |
 | [**Factor Formulas**](docs/TECHNICAL_MANUAL.md#factor-formula-reference) | Mathematical definitions |
 | [**Design Decisions**](docs/TECHNICAL_MANUAL.md#design-decisions--trade-offs) | Why HRP? Why DuckDB? |
+
+---
+
+## 🔌 Plugin Architecture
+
+All factors, optimizers, and risk models use the **Registry Pattern** for extensibility.
+
+### Adding a New Factor
+
+```python
+# quant/plugins/factors/my_factor.py
+from quant.core import FactorBase, PluginMetadata, register_factor
+
+@register_factor("MyFactor")
+class MyFactor(FactorBase):
+    @property
+    def metadata(self):
+        return PluginMetadata(name="MyFactor", description="My custom factor")
+    
+    def compute(self, data):
+        return data.groupby("ticker")["close"].pct_change()
+```
+
+### Using Config-Driven Pipeline
+
+```yaml
+# config/strategies.yaml
+factors:
+  - name: "VSM"
+  - name: "MyFactor"
+    params: {lookback: 60}
+optimizer:
+  name: "HRP"
+risk_rules:
+  - name: "MaxWeight"
+    params: {max_weight: 0.10}
+```
+
+```python
+from quant.features.pipeline import FactorPipeline
+pipeline = FactorPipeline.from_config("config/strategies.yaml")
+results = pipeline.compute_all(market_data)
+```
 
 ---
 

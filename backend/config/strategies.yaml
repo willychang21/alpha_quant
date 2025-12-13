@@ -1,0 +1,57 @@
+# Strategy Configuration
+# Defines which factors, optimizer, and risk rules to use
+
+strategy:
+  name: "momentum_quality"
+  version: "1.0"
+  description: "Momentum + Quality factor strategy with HRP optimization"
+
+factors:
+  - name: "VSM"
+    enabled: true
+    params:
+      lookback: 252
+      vol_window: 60
+      target_vol: 0.12
+  
+  - name: "BAB"
+    enabled: true
+    params:
+      beta_lookback: 252
+  
+  - name: "QMJ"
+    enabled: true
+    params:
+      profitability_weight: 0.5
+      growth_weight: 0.25
+      safety_weight: 0.25
+
+  - name: "Momentum"
+    enabled: true
+    params:
+      lookback: 252
+
+optimizer:
+  name: "HRP"
+  params:
+    linkage_method: "ward"
+    risk_measure: "variance"
+
+risk_rules:
+  - name: "MaxWeight"
+    params:
+      max_weight: 0.10
+  
+  - name: "Sector"
+    params:
+      max_sector_weight: 0.30
+  
+  - name: "Beta"
+    params:
+      min_beta: 0.8
+      max_beta: 1.2
+
+pipeline:
+  winsorize_limits: [0.01, 0.01]
+  neutralize_by_sector: true
+  cache_enabled: true

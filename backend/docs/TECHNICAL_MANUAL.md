@@ -35,6 +35,7 @@ This document provides comprehensive technical documentation for the DCA Quant B
 | **Tier-3** | Production Infrastructure | Ray distributed computing, MLflow tracking, real-time streaming |
 | **Phase-3** | Operational Resilience | Health endpoints, circuit breaker, data freshness, Alembic migrations |
 | **ML-Alpha** | ML Enhancement | SHAP attribution, Constrained GBM, Residual Alpha, Online Regime, Supply Chain GNN |
+| **Registry** | Plugin Architecture | Factor/Optimizer/RiskModel plugins, YAML config, dynamic pipeline |
 
 ### 1.2 Technology Stack
 
@@ -627,12 +628,18 @@ RS_momentum = ROC₁₄(RS_ratio)
 |---------------|-------------------|
 | **API Router** | `app/api/v1/router.py` |
 | **API Endpoints** | `app/api/v1/endpoints/*.py` |
-| **Factor Zoo** | `quant/features/*.py` |
+| **Registry Pattern** | |
+| ├─ Interfaces (ABCs) | `quant/core/interfaces.py` |
+| ├─ Plugin Registry | `quant/core/registry.py` |
+| ├─ Config Models | `quant/core/config_models.py` |
+| └─ Config Loader | `quant/core/config_loader.py` |
+| **Factor Plugins** | `quant/plugins/factors/*.py` |
+| **Optimizer Plugins** | `quant/plugins/optimizers/*.py` |
+| **Risk Model Plugins** | `quant/plugins/risk_models/*.py` |
 | **Factor Pipeline** | `quant/features/pipeline.py` |
+| **Dynamic Pipeline** | `quant/features/dynamic_pipeline.py` |
 | **Ranking Engine** | `quant/selection/ranking.py` |
 | **Portfolio Optimizer** | `quant/portfolio/optimizer.py` |
-| **HRP & Black-Litterman** | `quant/portfolio/advanced_optimizers.py` |
-| **Kelly Criterion** | `quant/portfolio/kelly.py` |
 | **HMM Regime Detection** | `quant/regime/hmm.py` |
 | **Backtest Engine** | `quant/backtest/engine.py` |
 | **Distributed Backtest** | `quant/backtest/distributed.py` |
@@ -647,6 +654,7 @@ RS_momentum = ROC₁₄(RS_ratio)
 | **Worker** | `compute/worker.py` |
 | **Daily Job Script** | `scripts/run_daily_job.py` |
 | **Weekly Job Script** | `scripts/run_weekly_job.py` |
+| **Strategy Config** | `config/strategies.yaml` |
 
 ---
 

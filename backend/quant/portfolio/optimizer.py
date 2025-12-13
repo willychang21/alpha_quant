@@ -1,12 +1,13 @@
 """Portfolio Optimizer Module.
 
-Implements multiple optimization strategies:
+Implements multiple optimization strategies via Registry Pattern:
 - HRP (Hierarchical Risk Parity)
 - Black-Litterman
 - MVO (Mean-Variance Optimization)
 - Kelly Criterion
 
-Integrates with RankingEngine signals and stores targets to Parquet.
+All optimizers are loaded dynamically from quant.plugins.optimizers.
+New optimizers can be added as plugins without modifying this file.
 """
 
 from sqlalchemy.orm import Session
@@ -17,10 +18,6 @@ import pandas as pd
 import numpy as np
 import cvxpy as cp
 from sklearn.covariance import LedoitWolf
-# Tier-1: Advanced Optimizers
-from quant.portfolio.advanced_optimizers import HRPOptimizer, BlackLittermanModel
-# Tier-2: Money Management
-from quant.portfolio.kelly import optimize_multivariate_kelly
 from quant.portfolio.risk_control import apply_vol_targeting
 import yfinance as yf
 
@@ -28,6 +25,9 @@ import yfinance as yf
 from core.structured_logger import get_structured_logger
 from core.rate_limiter import get_yfinance_rate_limiter
 from config.quant_config import get_optimization_config, OptimizationConfig
+
+# Registry Pattern - all optimizers and risk models loaded from here
+from quant.core.registry import registry
 
 logger = get_structured_logger("PortfolioOptimizer")
 
@@ -49,6 +49,60 @@ class PortfolioOptimizer:
         self.db = db
         self.config = config or get_optimization_config()
         self._rate_limiter = get_yfinance_rate_limiter()
+        
+        # Initialize Registry with plugins
+        registry.discover_plugins("quant.plugins")
+        logger.info(
+            f"Registry initialized: {len(registry.list_optimizers())} optimizers, "
+            f"{len(registry.list_risk_models())} risk models"
+        )
+
+    def get_optimizer(self, name: str, params: Optional[Dict] = None):
+        """Get an optimizer instance from the Registry.
+        
+        Args:
+            name: Registered optimizer name ('HRP', 'MVO', 'BlackLitterman', 'Kelly')
+            params: Optional parameters for the optimizer
+            
+        Returns:
+            Instantiated optimizer plugin.
+        """
+        optimizer_cls = registry.get_optimizer(name)
+        return optimizer_cls(params=params or {})
+
+    def check_risk_constraints(
+        self,
+        weights: pd.Series,
+        sectors: Optional[Dict[str, str]] = None,
+        betas: Optional[Dict[str, float]] = None,
+    ) -> List[Tuple[str, bool, Optional[str]]]:
+        """Check portfolio weights against all registered risk constraints.
+        
+        Args:
+            weights: Portfolio weights indexed by ticker.
+            sectors: Optional ticker -> sector mapping.
+            betas: Optional ticker -> beta mapping.
+            
+        Returns:
+            List of (constraint_name, is_valid, error_message) tuples.
+        """
+        results = []
+        
+        for name in registry.list_risk_models():
+            try:
+                risk_cls = registry.get_risk_model(name)
+                risk_model = risk_cls(params={})
+                is_valid, msg = risk_model.check_constraints(
+                    weights, sectors=sectors, betas=betas
+                )
+                results.append((name, is_valid, msg))
+                if not is_valid:
+                    logger.warning(f"Risk constraint '{name}' violated: {msg}")
+            except Exception as e:
+                logger.warning(f"Risk model '{name}' check failed: {e}")
+                results.append((name, True, f"Check skipped: {e}"))
+                
+        return results
 
     def run_optimization(
         self, 
@@ -249,34 +303,33 @@ class PortfolioOptimizer:
                 target_beta = 1.0
                 logger.info(f"Beta Constraints: Target Beta = {target_beta}")
 
-        # --- Tier-1: Choose Optimizer ---
+        # --- Run Optimizer from Registry ---
+        cov_matrix = returns_df_named.cov() * 252  # Annualized
         
         if optimizer == 'hrp':
-            # Hierarchical Risk Parity (more robust, no matrix inversion)
-            logger.info("🔷 Using HRP Optimizer (Tier-1)")
+            logger.info("🔷 Using HRP Optimizer (Registry Plugin)")
             
-            hrp = HRPOptimizer()
-            hrp_weights = hrp.optimize(returns_df_named)
+            hrp_plugin = self.get_optimizer('HRP', {'linkage_method': 'ward'})
+            weights_series = hrp_plugin.optimize(returns_df_named, cov_matrix)
             
-            if not hrp_weights:
+            if weights_series.empty or weights_series.sum() == 0:
                 logger.warning("HRP optimization failed, falling back to MVO.")
                 optimizer = 'mvo'
             else:
-                # Store with tickers
-                final_tickers = [t for t in valid_tickers if t in hrp_weights]
-                final_weights = [hrp_weights[t] for t in final_tickers]
+                final_weights = weights_series.to_dict()
+                final_tickers = [t for t in valid_tickers if t in final_weights]
+                final_weight_list = [final_weights[t] for t in final_tickers]
                 
-                self._store_targets(final_tickers, final_weights, optimization_date, optimizer='hrp')
+                self._store_targets(final_tickers, final_weight_list, optimization_date, optimizer='hrp')
                 
                 logger.info(f"✅ HRP Optimization complete. Top 5 weights:")
-                for ticker, w in sorted(zip(final_tickers, final_weights), key=lambda x: x[1], reverse=True)[:5]:
+                for ticker, w in sorted(zip(final_tickers, final_weight_list), key=lambda x: x[1], reverse=True)[:5]:
                     logger.info(f"   {ticker}: {w:.2%}")
                 
-                return {'tickers': final_tickers, 'weights': final_weights, 'optimizer': 'hrp'}
+                return {'tickers': final_tickers, 'weights': final_weight_list, 'optimizer': 'hrp'}
         
         if optimizer == 'bl':
-            # Black-Litterman Model (combines market equilibrium with alpha views)
-            logger.info("🔶 Using Black-Litterman Optimizer (Tier-1)")
+            logger.info("🔶 Using Black-Litterman Optimizer (Registry Plugin)")
             
             try:
                 # Fetch market caps for equilibrium returns
@@ -291,7 +344,6 @@ class PortfolioOptimizer:
                         mkt_cap = info.get('marketCap', 0)
                         if mkt_cap and mkt_cap > 0:
                             market_caps[ticker] = mkt_cap
-                        # Annualized volatility from returns
                         if ticker in returns_df_named.columns:
                             vol = returns_df_named[ticker].std() * np.sqrt(252)
                             volatilities[ticker] = vol if vol > 0 else 0.25
@@ -302,109 +354,74 @@ class PortfolioOptimizer:
                     logger.warning("Insufficient market cap data for Black-Litterman, falling back to HRP.")
                     optimizer = 'hrp'
                 else:
-                    # Prepare inputs for Black-Litterman
                     valid_bl_tickers = [t for t in valid_tickers if t in market_caps and t in volatilities]
-                    
-                    market_caps_series = pd.Series({t: market_caps[t] for t in valid_bl_tickers})
-                    cov_matrix = returns_df_named[valid_bl_tickers].cov() * 252  # Annualized
-                    
-                    # Z-scores from ranking signals
+                    bl_cov = returns_df_named[valid_bl_tickers].cov() * 252
                     z_scores = {t: ticker_metadata[t]['score'] for t in valid_bl_tickers}
-                    vol_dict = {t: volatilities[t] for t in valid_bl_tickers}
                     
-                    # Run Black-Litterman
-                    bl = BlackLittermanModel(tau=0.05, risk_aversion=2.5)
-                    bl_weights = bl.optimize(cov_matrix, market_caps_series, z_scores, vol_dict, ic=0.05)
+                    bl_plugin = self.get_optimizer('BlackLitterman', {
+                        'tau': 0.05,
+                        'risk_aversion': 2.5,
+                        'ic': 0.05
+                    })
                     
-                    if not bl_weights:
+                    weights_series = bl_plugin.optimize(
+                        returns_df_named[valid_bl_tickers],
+                        bl_cov,
+                        market_caps=market_caps,
+                        z_scores=z_scores,
+                        volatilities=volatilities
+                    )
+                    
+                    if weights_series.empty:
                         logger.warning("Black-Litterman failed, falling back to HRP.")
                         optimizer = 'hrp'
                     else:
-                        final_tickers = [t for t in valid_tickers if t in bl_weights]
-                        final_weights = [bl_weights[t] for t in final_tickers]
+                        final_weights = weights_series.to_dict()
+                        final_tickers = [t for t in valid_tickers if t in final_weights]
+                        final_weight_list = [final_weights[t] for t in final_tickers]
                         
-                        self._store_targets(final_tickers, final_weights, optimization_date, optimizer='bl')
+                        self._store_targets(final_tickers, final_weight_list, optimization_date, optimizer='bl')
                         
                         logger.info(f"✅ Black-Litterman Optimization complete. Top 5 weights:")
-                        for ticker, w in sorted(zip(final_tickers, final_weights), key=lambda x: x[1], reverse=True)[:5]:
+                        for ticker, w in sorted(zip(final_tickers, final_weight_list), key=lambda x: x[1], reverse=True)[:5]:
                             logger.info(f"   {ticker}: {w:.2%}")
                         
-                        return {'tickers': final_tickers, 'weights': final_weights, 'optimizer': 'bl'}
+                        return {'tickers': final_tickers, 'weights': final_weight_list, 'optimizer': 'bl'}
                         
             except Exception as e:
                 logger.error(f"Black-Litterman optimization error: {e}")
                 optimizer = 'mvo'
         
         if optimizer == 'kelly':
-            # Multivariate Kelly Optimization (Tier-2)
-            logger.info("🚀 Using Multivariate Kelly Optimizer (Tier-2)")
+            logger.info("🚀 Using Kelly Optimizer (Registry Plugin)")
             
             try:
-                # Calculate inputs
-                # Expected Returns: We use the Alpha Scores scaled to annual returns
-                expected_returns = aligned_alphas * 0.05 
+                kelly_plugin = self.get_optimizer('Kelly', {
+                    'fractional_kelly': 0.5,
+                    'max_leverage': 1.0
+                })
                 
-                # Covariance
-                cov_matrix = returns_df_named.cov().values * 252
+                expected_returns = pd.Series(aligned_alphas * 0.05, index=valid_tickers)
                 
-                kelly_weights = optimize_multivariate_kelly(
-                    expected_returns, 
-                    cov_matrix, 
-                    max_leverage=1.0, # Long only, fully invested max
-                    fractional_kelly=0.5, # Half-Kelly
-                    # Phase 8 Constraints
-                    sector_mapper=sector_mapper,
-                    sector_limits=sector_limits,
-                    beta_vector=beta_vector,
-                    target_beta=target_beta
-                )
-                
-                # Map back
-                optimal_weights = kelly_weights
+                weights_series = kelly_plugin.optimize(expected_returns, cov_matrix)
+                optimal_weights = weights_series.values
                 
             except Exception as e:
                 logger.error(f"Kelly optimization error: {e}")
                 optimizer = 'mvo'
                 
-        # --- Original MVO Path ---
         if optimizer == 'mvo':
-            logger.info("🔸 Using MVO Optimizer (fallback)")
+            logger.info("🔸 Using MVO Optimizer (Registry Plugin)")
             
-            # 3. Estimate Covariance (Ledoit-Wolf)
-            lw = LedoitWolf()
-            covariance_matrix = lw.fit(returns_df).covariance_
+            mvo_plugin = self.get_optimizer('MVO', {
+                'risk_aversion': risk_aversion,
+                'max_weight': max_weight,
+                'long_only': True
+            })
             
-            # 4. Optimize (CVXPY)
-            n_assets = len(valid_tickers)
-            w = cp.Variable(n_assets)
-            
-            # Scale alpha to be comparable to variance
-            scaled_alpha = aligned_alphas * 0.0005  # 1 Z-score = 5bps daily alpha
-            
-            risk = cp.quad_form(w, covariance_matrix)
-            ret = scaled_alpha @ w
-            
-            objective = cp.Maximize(ret - risk_aversion * risk)
-            
-            constraints = [
-                cp.sum(w) == 1,  # Fully invested
-                w >= 0,  # Long only
-                w <= max_weight  # Diversification constraint
-            ]
-            
-            prob = cp.Problem(objective, constraints)
-            
-            try:
-                prob.solve()
-            except Exception as e:
-                logger.error(f"Solver failed: {e}")
-                return
-                
-            if w.value is None:
-                logger.error("Optimization failed (unbounded or infeasible).")
-                return
-            
-            optimal_weights = w.value
+            expected_returns = pd.Series(aligned_alphas * 0.0005, index=valid_tickers)
+            weights_series = mvo_plugin.optimize(expected_returns, cov_matrix)
+            optimal_weights = weights_series.values
         
         # Clean weights
         optimal_weights[optimal_weights < 0.001] = 0
