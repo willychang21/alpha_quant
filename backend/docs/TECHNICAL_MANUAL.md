@@ -577,63 +577,80 @@ The system uses a **Plugin Registry Pattern** to separate the platform (core log
 
 ```mermaid
 graph TB
-    subgraph "🔌 Core Interfaces (quant/core/)"
+    subgraph "Core Interfaces"
         IFB[FactorBase ABC]
         IOB[OptimizerBase ABC]
         IRB[RiskModelBase ABC]
         PM[PluginMetadata]
     end
 
-    subgraph "📚 Plugin Registry"
+    subgraph "Plugin Registry"
         REG[PluginRegistry Singleton]
+        FF[Factor Dict]
+        OF[Optimizer Dict]
+        RF[RiskModel Dict]
         
-        REG --> |@register_factor| FF[Factor Registry Dict]
-        REG --> |@register_optimizer| OF[Optimizer Registry Dict]
-        REG --> |@register_risk_model| RF[RiskModel Registry Dict]
+        REG --> FF
+        REG --> OF
+        REG --> RF
     end
 
-    subgraph "🧩 Factor Plugins (quant/plugins/factors/)"
-        VSM[VSMFactor] --> IFB
-        BAB[BABFactor] --> IFB
-        QMJ[QMJFactor] --> IFB
-        MOM[MomentumFactor] --> IFB
+    subgraph "Factor Plugins"
+        VSM[VSMFactor]
+        BAB[BABFactor]
+        QMJ[QMJFactor]
+        MOM[MomentumFactor]
+        
+        VSM --> IFB
+        BAB --> IFB
+        QMJ --> IFB
+        MOM --> IFB
     end
 
-    subgraph "⚙️ Optimizer Plugins (quant/plugins/optimizers/)"
-        HRP[HRPOptimizer] --> IOB
-        MVO[MVOOptimizer] --> IOB
-        BL[BlackLittermanOptimizer] --> IOB
-        KELLY[KellyOptimizer] --> IOB
+    subgraph "Optimizer Plugins"
+        HRP[HRPOptimizer]
+        MVO[MVOOptimizer]
+        BL[BlackLitterman]
+        KELLY[KellyOptimizer]
+        
+        HRP --> IOB
+        MVO --> IOB
+        BL --> IOB
+        KELLY --> IOB
     end
 
-    subgraph "🛡️ Risk Model Plugins (quant/plugins/risk_models/)"
-        MW[MaxWeightConstraint] --> IRB
-        SEC[SectorConstraint] --> IRB
-        BETA[BetaConstraint] --> IRB
+    subgraph "Risk Model Plugins"
+        MW[MaxWeight]
+        SEC[Sector]
+        BETA[Beta]
+        
+        MW --> IRB
+        SEC --> IRB
+        BETA --> IRB
     end
 
-    VSM -.-> |register| FF
-    BAB -.-> |register| FF
-    QMJ -.-> |register| FF
-    MOM -.-> |register| FF
+    VSM -.-> FF
+    BAB -.-> FF
+    QMJ -.-> FF
+    MOM -.-> FF
 
-    HRP -.-> |register| OF
-    MVO -.-> |register| OF
-    BL -.-> |register| OF
-    KELLY -.-> |register| OF
+    HRP -.-> OF
+    MVO -.-> OF
+    BL -.-> OF
+    KELLY -.-> OF
 
-    MW -.-> |register| RF
-    SEC -.-> |register| RF
-    BETA -.-> |register| RF
+    MW -.-> RF
+    SEC -.-> RF
+    BETA -.-> RF
 
-    subgraph "📄 Configuration"
+    subgraph "Configuration"
         YAML[strategies.yaml]
         LOADER[ConfigLoader]
         YAML --> LOADER
-        LOADER --> |validate| REG
+        LOADER --> REG
     end
 
-    subgraph "🚀 Runtime"
+    subgraph "Runtime"
         PIPE[DynamicFactorPipeline]
         OPT[PortfolioOptimizer]
         
